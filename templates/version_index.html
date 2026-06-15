@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Kubernetes {{ k8s_version }} API Reference{% endblock %}
+
+{% block meta_description %}{{ meta_description }}{% endblock %}
+
+{% block content %}
+<h1>Kubernetes {{ k8s_version }} API Reference</h1>
+<nav aria-label="API groups">
+  <ul>
+    {% for group in groups %}
+    <li><a href="{{ group.href | safe }}">{{ group.display }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endblock %}

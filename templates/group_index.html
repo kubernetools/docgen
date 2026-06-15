@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}{{ group_display }} &mdash; Kubernetes {{ k8s_version }} API Reference{% endblock %}
+
+{% block meta_description %}{{ meta_description }}{% endblock %}
+
+{% block content %}
+<h1>{{ group_display }} <span class="badge">{{ k8s_version }}</span></h1>
+<nav aria-label="{{ group_display }} resources">
+  <ul>
+    {% for resource in resources %}
+    <li>
+      <a href="{{ resource.versions[0].href | safe }}">{{ resource.kind }}</a>
+      <span class="badge">{{ resource.versions[0].api_version }}</span>
+      {% for v in resource.versions[1:] %}
+      <span class="badge">{{ v.api_version }}</span>
+      {% endfor %}
+    </li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endblock %}

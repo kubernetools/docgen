@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}{{ kind }} {{ api_version }} ({{ group_display }}) &mdash; Kubernetes {{ k8s_version }}{% endblock %}
+
+{% block meta_description %}{{ meta_description }}{% endblock %}
+
+{% block jsonld %}{{ json_ld | safe }}{% endblock %}
+
+{% block content %}
+<article>
+  <h1>{{ kind }} <span class="badge">{{ group_display }}/{{ api_version }}</span></h1>
+  {% if other_versions %}
+  <p class="other-versions">Other versions:
+    {% for v in other_versions %}
+    <a href="{{ v.href | safe }}" class="badge">{{ v.api_version }}</a>
+    {% endfor %}
+  </p>
+  {% endif %}
+  {% if description %}
+  <p>{{ description }}</p>
+  {% endif %}
+  <section aria-labelledby="fields-heading">
+    <h2 id="fields-heading">Fields</h2>
+    {% if fields %}
+    <dl>
+      {% for field in fields %}
+      <dt{% if field.required %} class="req"{% endif %}>
+        {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
+      </dt>
+      <dd>{{ field.description if field.description else "No description available." }}</dd>
+      {% endfor %}
+    </dl>
+    {% else %}
+    <p>No fields documented.</p>
+    {% endif %}
+  </section>
+  {% if list_fields %}
+  <section aria-labelledby="list-heading">
+    <h2 id="list-heading">{{ kind }}List</h2>
+    {% if list_description %}
+    <p>{{ list_description }}</p>
+    {% endif %}
+    <dl>
+      {% for field in list_fields %}
+      <dt{% if field.required %} class="req"{% endif %}>
+        {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
+      </dt>
+      <dd>{{ field.description if field.description else "No description available." }}</dd>
+      {% endfor %}
+    </dl>
+  </section>
+  {% endif %}
+</article>
+{% endblock %}
