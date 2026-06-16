@@ -9,9 +9,19 @@ permissions:
   contents: write
 
 jobs:
-  build-linux-x86_64:
-    name: Build Linux x86_64
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.suffix }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            suffix: linux-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: macos-arm64
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
@@ -20,18 +30,19 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1 stable
         with:
           toolchain: stable
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
       - name: Install musl-tools
+        if: runner.os == 'Linux'
         run: sudo apt-get install -y musl-tools
 
       - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: cp target/x86_64-unknown-linux-musl/release/docgen docgen-${{ github.ref_name }}-linux-x86_64
+        run: cp target/${{ matrix.target }}/release/docgen docgen-${{ github.ref_name }}-${{ matrix.suffix }}
 
       - name: Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
-          files: docgen-${{ github.ref_name }}-linux-x86_64
+          files: docgen-${{ github.ref_name }}-${{ matrix.suffix }}
