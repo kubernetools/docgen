@@ -24,7 +24,7 @@ pub enum Commands {
         out: PathBuf,
         #[arg(
             long,
-            default_value = "https://kubernetools.com",
+            default_value = "https://www.kubernetools.com",
             help = "Base URL for canonical links and sitemap"
         )]
         base_url: String,

@@ -23,7 +23,7 @@ done
 |------|---------|-------------|
 | `-k`, `--k8s-version` | *(required)* | Kubernetes minor version, e.g. `v1.36` |
 | `-o`, `--out` | `./site` | Output directory |
-| `--base-url` | `https://kubernetools.com` | Base URL for canonical links and sitemap |
+| `--base-url` | `https://www.kubernetools.com` | Base URL for canonical links and sitemap |
 | `--token` | `$GITHUB_TOKEN` | GitHub token (raises API rate limit) |
 
 ### Output layout

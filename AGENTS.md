@@ -17,7 +17,7 @@ rm -rf ./site && cargo run --release -- generate --k8s-version v1.33 --out ./sit
 ```
 
 Optional flags:
-- `--base-url https://kubernetools.com` — absolute prefix for canonical URLs and sitemap (default value)
+- `--base-url https://www.kubernetools.com` — absolute prefix for canonical URLs and sitemap (default value)
 - `--token` / env `GITHUB_TOKEN` — GitHub PAT for higher rate limits
 
 ## Module map
