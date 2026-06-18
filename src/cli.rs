@@ -19,5 +19,7 @@ pub enum Commands {
         base_url: String,
         #[arg(long, env = "GITHUB_TOKEN")]
         token: Option<String>,
+        #[arg(long, help = "Mark this version as latest: write sitemap.xml and robots.txt with /docs/latest/ URLs")]
+        is_latest: bool,
     },
 }
