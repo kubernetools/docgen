@@ -58,14 +58,23 @@ mod tests {
 
     #[test]
     fn short_name_strips_prefix_and_package() {
-        assert_eq!(short_name("#/components/schemas/io.k8s.api.core.v1.Pod"), "Pod");
-        assert_eq!(short_name("#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"), "ObjectMeta");
+        assert_eq!(
+            short_name("#/components/schemas/io.k8s.api.core.v1.Pod"),
+            "Pod"
+        );
+        assert_eq!(
+            short_name("#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"),
+            "ObjectMeta"
+        );
         assert_eq!(short_name("Pod"), "Pod");
     }
 
     #[test]
     fn resolve_direct_ref() {
-        let p = prop(None, Some("#/components/schemas/io.k8s.api.core.v1.PodSpec"));
+        let p = prop(
+            None,
+            Some("#/components/schemas/io.k8s.api.core.v1.PodSpec"),
+        );
         assert!(matches!(resolve_field_type(&p), FieldType::Ref(n) if n == "PodSpec"));
     }
 
@@ -91,10 +100,15 @@ mod tests {
             ty: Some("array".to_string()),
             ref_: None,
             all_of: None,
-            items: Some(Box::new(prop(None, Some("#/components/schemas/io.k8s.api.core.v1.Pod")))),
+            items: Some(Box::new(prop(
+                None,
+                Some("#/components/schemas/io.k8s.api.core.v1.Pod"),
+            ))),
             additional_properties: None,
         };
-        assert!(matches!(resolve_field_type(&p), FieldType::Array(inner) if matches!(*inner, FieldType::Ref(ref n) if n == "Pod")));
+        assert!(
+            matches!(resolve_field_type(&p), FieldType::Array(inner) if matches!(*inner, FieldType::Ref(ref n) if n == "Pod"))
+        );
     }
 
     #[test]
@@ -107,18 +121,29 @@ mod tests {
             items: None,
             additional_properties: Some(Box::new(prop(Some("string"), None))),
         };
-        assert!(matches!(resolve_field_type(&p), FieldType::Map(inner) if matches!(*inner, FieldType::Scalar(ref s) if s == "string")));
+        assert!(
+            matches!(resolve_field_type(&p), FieldType::Map(inner) if matches!(*inner, FieldType::Scalar(ref s) if s == "string"))
+        );
     }
 
     #[test]
     fn resolve_scalar() {
-        assert!(matches!(resolve_field_type(&prop(Some("string"), None)), FieldType::Scalar(s) if s == "string"));
-        assert!(matches!(resolve_field_type(&prop(Some("integer"), None)), FieldType::Scalar(s) if s == "integer"));
-        assert!(matches!(resolve_field_type(&prop(Some("boolean"), None)), FieldType::Scalar(s) if s == "boolean"));
+        assert!(
+            matches!(resolve_field_type(&prop(Some("string"), None)), FieldType::Scalar(s) if s == "string")
+        );
+        assert!(
+            matches!(resolve_field_type(&prop(Some("integer"), None)), FieldType::Scalar(s) if s == "integer")
+        );
+        assert!(
+            matches!(resolve_field_type(&prop(Some("boolean"), None)), FieldType::Scalar(s) if s == "boolean")
+        );
     }
 
     #[test]
     fn resolve_object_fallback() {
-        assert!(matches!(resolve_field_type(&prop(None, None)), FieldType::Object));
+        assert!(matches!(
+            resolve_field_type(&prop(None, None)),
+            FieldType::Object
+        ));
     }
 }

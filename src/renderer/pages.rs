@@ -27,6 +27,7 @@ pub struct ResourcePageCtx {
     pub list_fields: Vec<FieldCtx>,
     pub other_versions: Vec<VersionLink>,
     pub canonical_url: String,
+    pub canonical_path: String,
     pub breadcrumbs: Vec<Crumb>,
     pub meta_description: String,
     pub json_ld: String,
@@ -51,6 +52,7 @@ pub struct GroupIndexCtx {
     pub k8s_version: String,
     pub resources: Vec<ResourceLink>,
     pub canonical_url: String,
+    pub canonical_path: String,
     pub breadcrumbs: Vec<Crumb>,
     pub meta_description: String,
 }
@@ -66,6 +68,7 @@ pub struct VersionIndexCtx {
     pub k8s_version: String,
     pub groups: Vec<GroupLink>,
     pub canonical_url: String,
+    pub canonical_path: String,
     pub breadcrumbs: Vec<Crumb>,
     pub meta_description: String,
 }
