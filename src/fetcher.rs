@@ -23,7 +23,10 @@ pub async fn fetch_specs(version: &str, token: Option<&str>) -> Result<Vec<(Stri
 
 fn build_client(token: Option<&str>) -> Result<Client> {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("kubernetools-docgen/0.1"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("kubernetools-docgen/0.1"),
+    );
     headers.insert(
         ACCEPT,
         HeaderValue::from_static("application/vnd.github.v3+json"),
@@ -39,9 +42,7 @@ fn build_client(token: Option<&str>) -> Result<Client> {
 }
 
 async fn list_spec_files(client: &Client, version: &str) -> Result<Vec<(String, String)>> {
-    let url = format!(
-        "https://api.github.com/repos/kubernetools/specs/contents/specs/{version}"
-    );
+    let url = format!("https://api.github.com/repos/kubernetools/specs/contents/specs/{version}");
     let resp: Value = client
         .get(&url)
         .send()

@@ -20,14 +20,22 @@ pub fn parse_specs(specs: Vec<(String, Value)>, k8s_version: &str) -> Result<Vec
         let Some((file_group, file_version)) = parse_filename(&filename) else {
             continue;
         };
-        let spec: RawSpec = serde_json::from_value(value)
-            .with_context(|| format!("parsing {filename}"))?;
-        parse_spec_file(spec, k8s_version, &file_group, &file_version, &mut emitted, &mut resources);
+        let spec: RawSpec =
+            serde_json::from_value(value).with_context(|| format!("parsing {filename}"))?;
+        parse_spec_file(
+            spec,
+            k8s_version,
+            &file_group,
+            &file_version,
+            &mut emitted,
+            &mut resources,
+        );
     }
 
     // Separate List variants from root resources and attach them to their root.
-    let (lists, mut roots): (Vec<Resource>, Vec<Resource>) =
-        resources.into_iter().partition(|r| r.kind.ends_with("List"));
+    let (lists, mut roots): (Vec<Resource>, Vec<Resource>) = resources
+        .into_iter()
+        .partition(|r| r.kind.ends_with("List"));
 
     for list in lists {
         let root_kind = list.kind.strip_suffix("List").unwrap();
@@ -65,7 +73,10 @@ mod tests {
 
     #[test]
     fn parse_filename_core() {
-        assert_eq!(parse_filename("api__v1_openapi.json"), Some(("".into(), "v1".into())));
+        assert_eq!(
+            parse_filename("api__v1_openapi.json"),
+            Some(("".into(), "v1".into()))
+        );
     }
 
     #[test]
@@ -85,7 +96,10 @@ mod tests {
         assert_eq!(parse_filename("api_openapi.json"), None);
         assert_eq!(parse_filename("apis_openapi.json"), None);
         assert_eq!(parse_filename("version_openapi.json"), None);
-        assert_eq!(parse_filename(".well-known__openid-configuration_openapi.json"), None);
+        assert_eq!(
+            parse_filename(".well-known__openid-configuration_openapi.json"),
+            None
+        );
     }
 
     fn pod_spec(group: &str, version: &str) -> serde_json::Value {
@@ -153,8 +167,11 @@ mod tests {
     #[test]
     fn emitted_guard_deduplicates_cross_cutting_schemas() {
         let specs = vec![
-            ("api__v1_openapi.json".into(),      delete_options_spec("", "v1")),
-            ("apis__apps__v1_openapi.json".into(), delete_options_spec("apps", "v1")),
+            ("api__v1_openapi.json".into(), delete_options_spec("", "v1")),
+            (
+                "apis__apps__v1_openapi.json".into(),
+                delete_options_spec("apps", "v1"),
+            ),
         ];
         let resources = parse_specs(specs, "v1.33").unwrap();
         // DeleteOptions appears in both files under the same schema name;
@@ -166,18 +183,21 @@ mod tests {
 
     #[test]
     fn resources_are_sorted_by_kind() {
-        let specs = vec![("api__v1_openapi.json".into(), json!({
-            "components": { "schemas": {
-                "io.k8s.api.core.v1.Service": {
-                    "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Service"}],
-                    "properties": {}
-                },
-                "io.k8s.api.core.v1.Pod": {
-                    "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Pod"}],
-                    "properties": {}
-                }
-            }}
-        }))];
+        let specs = vec![(
+            "api__v1_openapi.json".into(),
+            json!({
+                "components": { "schemas": {
+                    "io.k8s.api.core.v1.Service": {
+                        "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Service"}],
+                        "properties": {}
+                    },
+                    "io.k8s.api.core.v1.Pod": {
+                        "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Pod"}],
+                        "properties": {}
+                    }
+                }}
+            }),
+        )];
         let resources = parse_specs(specs, "v1.33").unwrap();
         let kinds: Vec<&str> = resources.iter().map(|r| r.kind.as_str()).collect();
         assert_eq!(kinds, ["Pod", "Service"]);

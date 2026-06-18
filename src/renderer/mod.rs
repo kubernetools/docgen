@@ -14,9 +14,18 @@ use std::path::Path;
 pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: bool) -> Result<()> {
     let mut env = Environment::new();
     env.add_template("base.html", include_str!("../../templates/base.html"))?;
-    env.add_template("resource.html", include_str!("../../templates/resource.html"))?;
-    env.add_template("group_index.html", include_str!("../../templates/group_index.html"))?;
-    env.add_template("version_index.html", include_str!("../../templates/version_index.html"))?;
+    env.add_template(
+        "resource.html",
+        include_str!("../../templates/resource.html"),
+    )?;
+    env.add_template(
+        "group_index.html",
+        include_str!("../../templates/group_index.html"),
+    )?;
+    env.add_template(
+        "version_index.html",
+        include_str!("../../templates/version_index.html"),
+    )?;
 
     // Root-relative hrefs used for field type cross-links.
     let kind_paths: std::collections::HashMap<String, String> = resources
@@ -31,10 +40,13 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
         versions_by_kind
             .entry((r.group.clone(), r.kind.clone()))
             .or_default()
-            .push(VersionLink { api_version: r.api_version.clone(), href: resource_path(r) });
+            .push(VersionLink {
+                api_version: r.api_version.clone(),
+                href: resource_path(r),
+            });
     }
     for vs in versions_by_kind.values_mut() {
-        vs.sort_by(|a, b| version_rank(&b.api_version).cmp(&version_rank(&a.api_version)));
+        vs.sort_by_key(|v| std::cmp::Reverse(version_rank(&v.api_version)));
     }
 
     let mut by_version: BTreeMap<String, BTreeMap<String, Vec<&Resource>>> = BTreeMap::new();
@@ -69,8 +81,14 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             canonical_url: format!("{base_url}{version_canonical_path}"),
             canonical_path: version_canonical_path,
             breadcrumbs: vec![
-                Crumb { label: "Docs".into(), href: "/docs/".into() },
-                Crumb { label: k8s_version.clone(), href: version_path },
+                Crumb {
+                    label: "Docs".into(),
+                    href: "/docs/".into(),
+                },
+                Crumb {
+                    label: k8s_version.clone(),
+                    href: version_path,
+                },
             ],
             meta_description: format!(
                 "Complete Kubernetes {k8s_version} API reference documentation"
@@ -101,7 +119,10 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     });
                     let versions = rs
                         .iter()
-                        .map(|r| VersionLink { api_version: r.api_version.clone(), href: resource_path(r) })
+                        .map(|r| VersionLink {
+                            api_version: r.api_version.clone(),
+                            href: resource_path(r),
+                        })
                         .collect();
                     ResourceLink { kind, versions }
                 })
@@ -115,13 +136,20 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                 canonical_url: format!("{base_url}{group_canonical_path}"),
                 canonical_path: group_canonical_path,
                 breadcrumbs: vec![
-                    Crumb { label: "Docs".into(), href: "/docs/".into() },
-                    Crumb { label: k8s_version.clone(), href: format!("/docs/{k8s_version}/") },
-                    Crumb { label: group.clone(), href: group_path },
+                    Crumb {
+                        label: "Docs".into(),
+                        href: "/docs/".into(),
+                    },
+                    Crumb {
+                        label: k8s_version.clone(),
+                        href: format!("/docs/{k8s_version}/"),
+                    },
+                    Crumb {
+                        label: group.clone(),
+                        href: group_path,
+                    },
                 ],
-                meta_description: format!(
-                    "{group} API resources for Kubernetes {k8s_version}"
-                ),
+                meta_description: format!("{group} API resources for Kubernetes {k8s_version}"),
             };
             write_html(
                 &env,
@@ -133,7 +161,10 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             for resource in group_resources {
                 let path = resource_path(resource);
                 let kind_lower = resource.kind.to_lowercase();
-                let canonical_path = format!("/docs/latest/{group}/{}/{kind_lower}/", resource.api_version);
+                let canonical_path = format!(
+                    "/docs/latest/{group}/{}/{kind_lower}/",
+                    resource.api_version
+                );
                 let canonical_url = format!("{base_url}{canonical_path}");
                 sitemap_urls.push(canonical_url.clone());
 
@@ -198,10 +229,22 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     canonical_path,
                     json_ld,
                     breadcrumbs: vec![
-                        Crumb { label: "Docs".into(), href: "/docs/".into() },
-                        Crumb { label: k8s_version.clone(), href: format!("/docs/{k8s_version}/") },
-                        Crumb { label: group.clone(), href: format!("/docs/{k8s_version}/{group}/") },
-                        Crumb { label: resource.kind.clone(), href: path },
+                        Crumb {
+                            label: "Docs".into(),
+                            href: "/docs/".into(),
+                        },
+                        Crumb {
+                            label: k8s_version.clone(),
+                            href: format!("/docs/{k8s_version}/"),
+                        },
+                        Crumb {
+                            label: group.clone(),
+                            href: format!("/docs/{k8s_version}/{group}/"),
+                        },
+                        Crumb {
+                            label: resource.kind.clone(),
+                            href: path,
+                        },
                     ],
                     meta_description,
                 };
@@ -232,7 +275,11 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
     println!(
         "Generated {} resource pages + index pages{}",
         resources.len(),
-        if is_latest { " + sitemap.xml + robots.txt" } else { "" }
+        if is_latest {
+            " + sitemap.xml + robots.txt"
+        } else {
+            ""
+        }
     );
     Ok(())
 }
@@ -264,7 +311,12 @@ fn order_fields(fields: Vec<FieldCtx>) -> Vec<FieldCtx> {
             optional.push(f);
         }
     }
-    top.sort_by_key(|f| PINNED.iter().position(|&p| p == f.name).unwrap_or(usize::MAX));
+    top.sort_by_key(|f| {
+        PINNED
+            .iter()
+            .position(|&p| p == f.name)
+            .unwrap_or(usize::MAX)
+    });
     required.sort_by(|a, b| a.name.cmp(&b.name));
     optional.sort_by(|a, b| a.name.cmp(&b.name));
     top.into_iter().chain(required).chain(optional).collect()
@@ -275,9 +327,17 @@ fn order_fields(fields: Vec<FieldCtx>) -> Vec<FieldCtx> {
 fn version_rank(v: &str) -> (u32, u32, u32) {
     let s = v.strip_prefix('v').unwrap_or(v);
     if let Some(idx) = s.find("alpha") {
-        (s[..idx].parse().unwrap_or(0), 0, s[idx + 5..].parse().unwrap_or(0))
+        (
+            s[..idx].parse().unwrap_or(0),
+            0,
+            s[idx + 5..].parse().unwrap_or(0),
+        )
     } else if let Some(idx) = s.find("beta") {
-        (s[..idx].parse().unwrap_or(0), 1, s[idx + 4..].parse().unwrap_or(0))
+        (
+            s[..idx].parse().unwrap_or(0),
+            1,
+            s[idx + 4..].parse().unwrap_or(0),
+        )
     } else {
         (s.parse().unwrap_or(0), 2, 0)
     }
@@ -293,7 +353,12 @@ fn group_seg(group: &str) -> String {
 
 fn resource_path(r: &Resource) -> String {
     let g = group_seg(&r.group);
-    format!("/docs/{}/{g}/{}/{}/", r.k8s_version, r.api_version, r.kind.to_lowercase())
+    format!(
+        "/docs/{}/{g}/{}/{}/",
+        r.k8s_version,
+        r.api_version,
+        r.kind.to_lowercase()
+    )
 }
 
 fn fmt_field_type(ft: &FieldType) -> String {
@@ -334,8 +399,8 @@ mod tests {
         assert!(version_rank("v1alpha2") < version_rank("v1beta1"));
         assert!(version_rank("v1beta1") < version_rank("v1beta2"));
         assert!(version_rank("v1beta2") < version_rank("v1"));
-        assert!(version_rank("v1")      < version_rank("v2"));
-        assert!(version_rank("v2")      > version_rank("v2beta1"));
+        assert!(version_rank("v1") < version_rank("v2"));
+        assert!(version_rank("v2") > version_rank("v2beta1"));
     }
 
     #[test]
@@ -444,16 +509,34 @@ mod tests {
         let base = "https://example.com";
 
         // First render: two resources
-        render(&[make_resource("Foo"), make_resource("Bar")], dir.path(), base, true).unwrap();
+        render(
+            &[make_resource("Foo"), make_resource("Bar")],
+            dir.path(),
+            base,
+            true,
+        )
+        .unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
-        assert!(sitemap.contains("/docs/latest/core/v1/foo/"), "foo must be in sitemap after first render");
-        assert!(sitemap.contains("/docs/latest/core/v1/bar/"), "bar must be in sitemap after first render");
+        assert!(
+            sitemap.contains("/docs/latest/core/v1/foo/"),
+            "foo must be in sitemap after first render"
+        );
+        assert!(
+            sitemap.contains("/docs/latest/core/v1/bar/"),
+            "bar must be in sitemap after first render"
+        );
 
         // Second render: Bar removed from the spec
         render(&[make_resource("Foo")], dir.path(), base, true).unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
-        assert!(sitemap.contains("/docs/latest/core/v1/foo/"), "foo must still be present");
-        assert!(!sitemap.contains("/docs/latest/core/v1/bar/"), "stale bar entry must be evicted");
+        assert!(
+            sitemap.contains("/docs/latest/core/v1/foo/"),
+            "foo must still be present"
+        );
+        assert!(
+            !sitemap.contains("/docs/latest/core/v1/bar/"),
+            "stale bar entry must be evicted"
+        );
     }
 
     #[test]
@@ -463,14 +546,26 @@ mod tests {
 
         render(&[make_resource("Pod")], dir.path(), base, true).unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
-        assert!(sitemap.contains("/docs/latest/"), "sitemap must use /docs/latest/ URLs");
-        assert!(!sitemap.contains("/docs/v1.33/"), "sitemap must not contain versioned URLs");
+        assert!(
+            sitemap.contains("/docs/latest/"),
+            "sitemap must use /docs/latest/ URLs"
+        );
+        assert!(
+            !sitemap.contains("/docs/v1.33/"),
+            "sitemap must not contain versioned URLs"
+        );
     }
 
     #[test]
     fn render_writes_robots_txt() {
         let dir = tempfile::tempdir().unwrap();
-        render(&[make_resource("Pod")], dir.path(), "https://example.com", true).unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
         let robots = std::fs::read_to_string(dir.path().join("robots.txt")).unwrap();
         assert!(robots.contains("Allow: /docs/latest/"));
         assert!(robots.contains("Disallow: /docs/v"));
@@ -480,19 +575,33 @@ mod tests {
     fn render_robots_txt_overwrites_existing() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("robots.txt"), "old content").unwrap();
-        render(&[make_resource("Pod")], dir.path(), "https://example.com", true).unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
         let robots = std::fs::read_to_string(dir.path().join("robots.txt")).unwrap();
-        assert!(!robots.contains("old content"), "robots.txt must be overwritten");
+        assert!(
+            !robots.contains("old content"),
+            "robots.txt must be overwritten"
+        );
         assert!(robots.contains("Allow: /docs/latest/"));
     }
 
     #[test]
     fn render_json_ld_url_uses_latest() {
         let dir = tempfile::tempdir().unwrap();
-        render(&[make_resource("Pod")], dir.path(), "https://example.com", true).unwrap();
-        let html = std::fs::read_to_string(
-            dir.path().join("docs/v1.33/core/v1/pod/index.html"),
-        ).unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
         assert!(
             html.contains("https://example.com/docs/latest/core/v1/pod/"),
             "JSON-LD url must use /docs/latest/ canonical URL"
@@ -506,12 +615,17 @@ mod tests {
     #[test]
     fn render_canonical_link_points_to_latest() {
         let dir = tempfile::tempdir().unwrap();
-        render(&[make_resource("Pod")], dir.path(), "https://example.com", true).unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
 
         // Resource page: /docs/v1.33/core/v1/pod/index.html — canonical must point to /docs/latest/
-        let resource_html = std::fs::read_to_string(
-            dir.path().join("docs/v1.33/core/v1/pod/index.html"),
-        ).unwrap();
+        let resource_html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
         assert!(
             resource_html.contains(r#"<link rel="canonical" href="/docs/latest/core/v1/pod/">"#),
             "resource page canonical must point to /docs/latest/"
@@ -522,18 +636,16 @@ mod tests {
         );
 
         // Group index: /docs/v1.33/core/index.html
-        let group_html = std::fs::read_to_string(
-            dir.path().join("docs/v1.33/core/index.html"),
-        ).unwrap();
+        let group_html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/core/index.html")).unwrap();
         assert!(
             group_html.contains(r#"<link rel="canonical" href="/docs/latest/core/">"#),
             "group index canonical must point to /docs/latest/"
         );
 
         // Version index: /docs/v1.33/index.html
-        let version_html = std::fs::read_to_string(
-            dir.path().join("docs/v1.33/index.html"),
-        ).unwrap();
+        let version_html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/index.html")).unwrap();
         assert!(
             version_html.contains(r#"<link rel="canonical" href="/docs/latest/">"#),
             "version index canonical must point to /docs/latest/"
@@ -543,8 +655,20 @@ mod tests {
     #[test]
     fn render_without_is_latest_skips_sitemap_and_robots() {
         let dir = tempfile::tempdir().unwrap();
-        render(&[make_resource("Pod")], dir.path(), "https://example.com", false).unwrap();
-        assert!(!dir.path().join("sitemap.xml").exists(), "sitemap.xml must not be written when not is_latest");
-        assert!(!dir.path().join("robots.txt").exists(), "robots.txt must not be written when not is_latest");
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        assert!(
+            !dir.path().join("sitemap.xml").exists(),
+            "sitemap.xml must not be written when not is_latest"
+        );
+        assert!(
+            !dir.path().join("robots.txt").exists(),
+            "robots.txt must not be written when not is_latest"
+        );
     }
 }
