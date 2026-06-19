@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}{{ group_display }} &mdash; Kubernetes {{ k8s_version }} API Reference{% endblock %}
+{% block title %}{{ group_display }} &mdash; Kubernetes {{ k8s_version_display }} API Reference{% endblock %}
 
 {% block meta_description %}{{ meta_description }}{% endblock %}
 
 {% block content %}
-<h1>{{ group_display }} <span class="badge">{{ k8s_version }}</span></h1>
+<h1>{{ group_display }} <span class="badge">{{ k8s_version_display }}</span></h1>
 <nav aria-label="{{ group_display }} resources">
   <ul>
     {% for resource in resources %}

@@ -8,11 +8,11 @@ specs in [kubernetools/specs](https://github.com/kubernetools/specs).
 ```bash
 cargo build --release
 
-# Generate docs for a specific Kubernetes minor version
-./target/release/docgen generate --k8s-version v1.36 --out ./site
+# Generate the canonical site under /docs/latest/ (with sitemap + robots.txt)
+./target/release/docgen generate --k8s-version v1.36 --out ./site --is-latest
 
-# Generate for multiple versions (sitemap accumulates across runs)
-for v in v1.33 v1.34 v1.35 v1.36; do
+# Also generate version-pinned copies for older versions
+for v in v1.33 v1.34 v1.35; do
   ./target/release/docgen generate --k8s-version $v --out ./site
 done
 ```
@@ -25,8 +25,11 @@ done
 | `-o`, `--out` | `./site` | Output directory |
 | `--base-url` | `https://www.kubernetools.com` | Base URL for canonical links and sitemap |
 | `--token` | `$GITHUB_TOKEN` | GitHub token (raises API rate limit) |
+| `--is-latest` | `false` | Generate site under `/docs/latest/` with all links rooted there, plus `sitemap.xml` and `robots.txt` |
 
 ### Output layout
+
+Without `--is-latest` (version-pinned, no sitemap):
 
 ```
 site/
@@ -40,8 +43,29 @@ site/
           ...
       apps/
         ...
-  sitemap.xml
 ```
+
+With `--is-latest` (canonical site, includes sitemap):
+
+```
+site/
+  docs/
+    latest/
+      index.html               # version index — title shows "v1.36 (latest)"
+      core/
+        index.html             # group index
+        v1/
+          pod/index.html       # resource page — all hrefs use /docs/latest/
+          ...
+      apps/
+        ...
+  sitemap.xml
+  robots.txt
+```
+
+All canonical `<link>` tags and JSON-LD URLs always point to `/docs/latest/...`.
+Pages generated with `--is-latest` are self-canonical; pages generated without it
+carry a canonical pointing to their `/docs/latest/` counterpart.
 
 ## How it works
 
@@ -58,7 +82,7 @@ site/
 ## Development
 
 ```bash
-cargo test       # run all unit tests (28 tests, no network required)
+cargo test       # run all unit tests (37 tests, no network required)
 cargo clippy     # lint
 ```
 

@@ -27,10 +27,13 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
         include_str!("../../templates/version_index.html"),
     )?;
 
+    let nav_prefix_top = if is_latest { "latest" } else {
+        resources.first().map(|r| r.k8s_version.as_str()).unwrap_or("")
+    };
     // Root-relative hrefs used for field type cross-links.
     let kind_paths: std::collections::HashMap<String, String> = resources
         .iter()
-        .map(|r| (r.kind.clone(), resource_path(r)))
+        .map(|r| (r.kind.clone(), resource_path(r, nav_prefix_top)))
         .collect();
 
     // All versions per (group, kind), sorted most-recent first — used for "other versions" links.
@@ -42,7 +45,7 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             .or_default()
             .push(VersionLink {
                 api_version: r.api_version.clone(),
-                href: resource_path(r),
+                href: resource_path(r, nav_prefix_top),
             });
     }
     for vs in versions_by_kind.values_mut() {
@@ -63,7 +66,13 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
     let mut sitemap_urls: Vec<String> = Vec::new();
 
     for (k8s_version, groups) in &by_version {
-        let version_path = format!("/docs/{k8s_version}/");
+        let nav_prefix = if is_latest { "latest" } else { k8s_version.as_str() };
+        let version_label = if is_latest {
+            format!("{k8s_version} (latest)")
+        } else {
+            k8s_version.clone()
+        };
+
         let version_canonical_path = "/docs/latest/".to_string();
         sitemap_urls.push(format!("{base_url}{version_canonical_path}"));
 
@@ -71,12 +80,13 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             .keys()
             .map(|g| GroupLink {
                 display: g.clone(),
-                href: format!("/docs/{k8s_version}/{g}/"),
+                href: format!("/docs/{nav_prefix}/{g}/"),
             })
             .collect();
 
         let version_ctx = VersionIndexCtx {
             k8s_version: k8s_version.clone(),
+            k8s_version_display: version_label.clone(),
             groups: group_links,
             canonical_url: format!("{base_url}{version_canonical_path}"),
             canonical_path: version_canonical_path,
@@ -86,8 +96,8 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     href: "/docs/".into(),
                 },
                 Crumb {
-                    label: k8s_version.clone(),
-                    href: version_path,
+                    label: version_label.clone(),
+                    href: format!("/docs/{nav_prefix}/"),
                 },
             ],
             meta_description: format!(
@@ -98,11 +108,10 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             &env,
             "version_index.html",
             &version_ctx,
-            &out.join(format!("docs/{k8s_version}/index.html")),
+            &out.join(format!("docs/{nav_prefix}/index.html")),
         )?;
 
         for (group, group_resources) in groups {
-            let group_path = format!("/docs/{k8s_version}/{group}/");
             let group_canonical_path = format!("/docs/latest/{group}/");
             sitemap_urls.push(format!("{base_url}{group_canonical_path}"));
 
@@ -121,7 +130,7 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                         .iter()
                         .map(|r| VersionLink {
                             api_version: r.api_version.clone(),
-                            href: resource_path(r),
+                            href: resource_path(r, nav_prefix),
                         })
                         .collect();
                     ResourceLink { kind, versions }
@@ -132,6 +141,7 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             let group_ctx = GroupIndexCtx {
                 group_display: group.clone(),
                 k8s_version: k8s_version.clone(),
+                k8s_version_display: version_label.clone(),
                 resources: resource_links,
                 canonical_url: format!("{base_url}{group_canonical_path}"),
                 canonical_path: group_canonical_path,
@@ -141,12 +151,12 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                         href: "/docs/".into(),
                     },
                     Crumb {
-                        label: k8s_version.clone(),
-                        href: format!("/docs/{k8s_version}/"),
+                        label: version_label.clone(),
+                        href: format!("/docs/{nav_prefix}/"),
                     },
                     Crumb {
                         label: group.clone(),
-                        href: group_path,
+                        href: format!("/docs/{nav_prefix}/{group}/"),
                     },
                 ],
                 meta_description: format!("{group} API resources for Kubernetes {k8s_version}"),
@@ -155,11 +165,11 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                 &env,
                 "group_index.html",
                 &group_ctx,
-                &out.join(format!("docs/{k8s_version}/{group}/index.html")),
+                &out.join(format!("docs/{nav_prefix}/{group}/index.html")),
             )?;
 
             for resource in group_resources {
-                let path = resource_path(resource);
+                let path = resource_path(resource, nav_prefix);
                 let kind_lower = resource.kind.to_lowercase();
                 let canonical_path = format!(
                     "/docs/latest/{group}/{}/{kind_lower}/",
@@ -220,6 +230,7 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     group_display: group.clone(),
                     api_version: resource.api_version.clone(),
                     k8s_version: k8s_version.clone(),
+                    k8s_version_display: version_label.clone(),
                     description: resource.description.clone(),
                     fields,
                     list_description: resource.list_description.clone(),
@@ -234,12 +245,12 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                             href: "/docs/".into(),
                         },
                         Crumb {
-                            label: k8s_version.clone(),
-                            href: format!("/docs/{k8s_version}/"),
+                            label: version_label.clone(),
+                            href: format!("/docs/{nav_prefix}/"),
                         },
                         Crumb {
                             label: group.clone(),
-                            href: format!("/docs/{k8s_version}/{group}/"),
+                            href: format!("/docs/{nav_prefix}/{group}/"),
                         },
                         Crumb {
                             label: resource.kind.clone(),
@@ -253,7 +264,7 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     "resource.html",
                     &ctx,
                     &out.join(format!(
-                        "docs/{k8s_version}/{group}/{}/{kind_lower}/index.html",
+                        "docs/{nav_prefix}/{group}/{}/{kind_lower}/index.html",
                         resource.api_version
                     )),
                 )?;
@@ -351,11 +362,10 @@ fn group_seg(group: &str) -> String {
     }
 }
 
-fn resource_path(r: &Resource) -> String {
+fn resource_path(r: &Resource, prefix: &str) -> String {
     let g = group_seg(&r.group);
     format!(
-        "/docs/{}/{g}/{}/{}/",
-        r.k8s_version,
+        "/docs/{prefix}/{g}/{}/{}/",
         r.api_version,
         r.kind.to_lowercase()
     )
@@ -471,7 +481,8 @@ mod tests {
             list_description: String::new(),
             list_fields: vec![],
         };
-        assert_eq!(resource_path(&r), "/docs/v1.33/core/v1/pod/");
+        assert_eq!(resource_path(&r, "v1.33"), "/docs/v1.33/core/v1/pod/");
+        assert_eq!(resource_path(&r, "latest"), "/docs/latest/core/v1/pod/");
     }
 
     #[test]
@@ -487,7 +498,8 @@ mod tests {
             list_description: String::new(),
             list_fields: vec![],
         };
-        assert_eq!(resource_path(&r), "/docs/v1.33/apps/v1/deployment/");
+        assert_eq!(resource_path(&r, "v1.33"), "/docs/v1.33/apps/v1/deployment/");
+        assert_eq!(resource_path(&r, "latest"), "/docs/latest/apps/v1/deployment/");
     }
 
     fn make_resource(kind: &str) -> crate::model::Resource {
@@ -601,7 +613,7 @@ mod tests {
         )
         .unwrap();
         let html =
-            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
             html.contains("https://example.com/docs/latest/core/v1/pod/"),
             "JSON-LD url must use /docs/latest/ canonical URL"
@@ -609,6 +621,56 @@ mod tests {
         assert!(
             !html.contains("\"url\":\"https://example.com/docs/v1.33/"),
             "JSON-LD url must not reference versioned URL"
+        );
+    }
+
+    #[test]
+    fn render_is_latest_writes_to_docs_latest() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        assert!(
+            dir.path().join("docs/latest/core/v1/pod/index.html").exists(),
+            "resource page must be written under docs/latest/ when is_latest"
+        );
+        assert!(
+            dir.path().join("docs/latest/core/index.html").exists(),
+            "group index must be written under docs/latest/ when is_latest"
+        );
+        assert!(
+            dir.path().join("docs/latest/index.html").exists(),
+            "version index must be written under docs/latest/ when is_latest"
+        );
+        assert!(
+            !dir.path().join("docs/v1.33").exists(),
+            "versioned directory must not be written when is_latest"
+        );
+    }
+
+    #[test]
+    fn render_is_latest_links_use_latest_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("/docs/latest/core/"),
+            "breadcrumb hrefs must use /docs/latest/ prefix"
+        );
+        assert!(
+            !html.contains("/docs/v1.33/"),
+            "no versioned hrefs must appear in is_latest pages"
         );
     }
 
@@ -623,32 +685,66 @@ mod tests {
         )
         .unwrap();
 
-        // Resource page: /docs/v1.33/core/v1/pod/index.html — canonical must point to /docs/latest/
+        // Resource page written to /docs/latest/ — canonical is self-referential
         let resource_html =
-            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
             resource_html.contains(r#"<link rel="canonical" href="/docs/latest/core/v1/pod/">"#),
             "resource page canonical must point to /docs/latest/"
         );
-        assert!(
-            !resource_html.contains(r#"<link rel="canonical" href="/docs/v1.33/"#),
-            "resource page canonical link must not reference versioned URL"
-        );
 
-        // Group index: /docs/v1.33/core/index.html
+        // Group index: /docs/latest/core/index.html
         let group_html =
-            std::fs::read_to_string(dir.path().join("docs/v1.33/core/index.html")).unwrap();
+            std::fs::read_to_string(dir.path().join("docs/latest/core/index.html")).unwrap();
         assert!(
             group_html.contains(r#"<link rel="canonical" href="/docs/latest/core/">"#),
             "group index canonical must point to /docs/latest/"
         );
 
-        // Version index: /docs/v1.33/index.html
+        // Version index: /docs/latest/index.html
         let version_html =
-            std::fs::read_to_string(dir.path().join("docs/v1.33/index.html")).unwrap();
+            std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
         assert!(
             version_html.contains(r#"<link rel="canonical" href="/docs/latest/">"#),
             "version index canonical must point to /docs/latest/"
+        );
+    }
+
+    #[test]
+    fn render_without_is_latest_writes_to_versioned_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        assert!(
+            dir.path().join("docs/v1.33/core/v1/pod/index.html").exists(),
+            "resource page must be written under docs/v1.33/ when not is_latest"
+        );
+        assert!(
+            !dir.path().join("docs/latest").exists(),
+            "docs/latest must not be written when not is_latest"
+        );
+    }
+
+    #[test]
+    fn render_version_label_shows_latest_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
+        assert!(
+            html.contains("v1.33 (latest)"),
+            "version index title must show 'v1.33 (latest)' when is_latest"
         );
     }
 

@@ -21,6 +21,7 @@ pub struct ResourcePageCtx {
     pub group_display: String,
     pub api_version: String,
     pub k8s_version: String,
+    pub k8s_version_display: String,
     pub description: String,
     pub fields: Vec<FieldCtx>,
     pub list_description: String,
@@ -50,6 +51,7 @@ pub struct ResourceLink {
 pub struct GroupIndexCtx {
     pub group_display: String,
     pub k8s_version: String,
+    pub k8s_version_display: String,
     pub resources: Vec<ResourceLink>,
     pub canonical_url: String,
     pub canonical_path: String,
@@ -66,6 +68,7 @@ pub struct GroupLink {
 #[derive(Serialize)]
 pub struct VersionIndexCtx {
     pub k8s_version: String,
+    pub k8s_version_display: String,
     pub groups: Vec<GroupLink>,
     pub canonical_url: String,
     pub canonical_path: String,
