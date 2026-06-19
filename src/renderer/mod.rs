@@ -27,8 +27,13 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
         include_str!("../../templates/version_index.html"),
     )?;
 
-    let nav_prefix_top = if is_latest { "latest" } else {
-        resources.first().map(|r| r.k8s_version.as_str()).unwrap_or("")
+    let nav_prefix_top = if is_latest {
+        "latest"
+    } else {
+        resources
+            .first()
+            .map(|r| r.k8s_version.as_str())
+            .unwrap_or("")
     };
     // Root-relative hrefs used for field type cross-links.
     let kind_paths: std::collections::HashMap<String, String> = resources
@@ -66,7 +71,11 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
     let mut sitemap_urls: Vec<String> = Vec::new();
 
     for (k8s_version, groups) in &by_version {
-        let nav_prefix = if is_latest { "latest" } else { k8s_version.as_str() };
+        let nav_prefix = if is_latest {
+            "latest"
+        } else {
+            k8s_version.as_str()
+        };
         let version_label = if is_latest {
             format!("{k8s_version} (latest)")
         } else {
@@ -498,8 +507,14 @@ mod tests {
             list_description: String::new(),
             list_fields: vec![],
         };
-        assert_eq!(resource_path(&r, "v1.33"), "/docs/v1.33/apps/v1/deployment/");
-        assert_eq!(resource_path(&r, "latest"), "/docs/latest/apps/v1/deployment/");
+        assert_eq!(
+            resource_path(&r, "v1.33"),
+            "/docs/v1.33/apps/v1/deployment/"
+        );
+        assert_eq!(
+            resource_path(&r, "latest"),
+            "/docs/latest/apps/v1/deployment/"
+        );
     }
 
     fn make_resource(kind: &str) -> crate::model::Resource {
@@ -635,7 +650,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            dir.path().join("docs/latest/core/v1/pod/index.html").exists(),
+            dir.path()
+                .join("docs/latest/core/v1/pod/index.html")
+                .exists(),
             "resource page must be written under docs/latest/ when is_latest"
         );
         assert!(
@@ -721,7 +738,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            dir.path().join("docs/v1.33/core/v1/pod/index.html").exists(),
+            dir.path()
+                .join("docs/v1.33/core/v1/pod/index.html")
+                .exists(),
             "resource page must be written under docs/v1.33/ when not is_latest"
         );
         assert!(
@@ -740,8 +759,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let html =
-            std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
+        let html = std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
         assert!(
             html.contains("v1.33 (latest)"),
             "version index title must show 'v1.33 (latest)' when is_latest"
