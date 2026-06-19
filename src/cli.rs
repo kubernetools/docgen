@@ -32,7 +32,7 @@ pub enum Commands {
         token: Option<String>,
         #[arg(
             long,
-            help = "Mark this version as latest: write sitemap.xml and robots.txt with /docs/latest/ URLs"
+            help = "Generate site under /docs/latest/ with all links rooted there, plus sitemap.xml and robots.txt"
         )]
         is_latest: bool,
     },
