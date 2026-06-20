@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ kind }} {{ api_version }} ({{ group_display }}) &mdash; Kubernetes {{ k8s_version_display }}{% endblock %}
+{% block title %}{{ page_title | safe }}{% endblock %}
 
 {% block meta_description %}{{ meta_description }}{% endblock %}
 
@@ -10,7 +10,7 @@
 <article>
   <h1>{{ kind }} <span class="badge">{{ group_display }}/{{ api_version }}</span></h1>
   {% if other_versions %}
-  <p class="other-versions">Other versions:
+  <p class="other-versions">{{ copy.label_other_versions }}
     {% for v in other_versions %}
     <a href="{{ v.href | safe }}" class="badge">{{ v.api_version }}</a>
     {% endfor %}
@@ -20,23 +20,23 @@
   <p>{{ description }}</p>
   {% endif %}
   <section aria-labelledby="fields-heading">
-    <h2 id="fields-heading">Fields</h2>
+    <h2 id="fields-heading">{{ copy.heading_fields }}</h2>
     {% if fields %}
     <dl>
       {% for field in fields %}
       <dt{% if field.required %} class="req"{% endif %}>
         {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
       </dt>
-      <dd>{{ field.description if field.description else "No description available." }}</dd>
+      <dd>{{ field.description if field.description else copy.msg_no_description }}</dd>
       {% endfor %}
     </dl>
     {% else %}
-    <p>No fields documented.</p>
+    <p>{{ copy.msg_no_fields }}</p>
     {% endif %}
   </section>
   {% if list_fields %}
   <section aria-labelledby="list-heading">
-    <h2 id="list-heading">{{ kind }}List</h2>
+    <h2 id="list-heading">{{ kind }}{{ copy.list_suffix }}</h2>
     {% if list_description %}
     <p>{{ list_description }}</p>
     {% endif %}
@@ -45,7 +45,7 @@
       <dt{% if field.required %} class="req"{% endif %}>
         {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
       </dt>
-      <dd>{{ field.description if field.description else "No description available." }}</dd>
+      <dd>{{ field.description if field.description else copy.msg_no_description }}</dd>
       {% endfor %}
     </dl>
   </section>

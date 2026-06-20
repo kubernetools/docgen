@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ group_display }} &mdash; Kubernetes {{ k8s_version_display }} API Reference{% endblock %}
+{% block title %}{{ page_title | safe }}{% endblock %}
 
 {% block meta_description %}{{ meta_description }}{% endblock %}
 

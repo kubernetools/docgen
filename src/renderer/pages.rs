@@ -1,3 +1,4 @@
+use super::copy::UiCopy;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -32,6 +33,8 @@ pub struct ResourcePageCtx {
     pub breadcrumbs: Vec<Crumb>,
     pub meta_description: String,
     pub json_ld: String,
+    pub page_title: String,
+    pub copy: UiCopy,
 }
 
 #[derive(Serialize, Clone)]
@@ -57,6 +60,8 @@ pub struct GroupIndexCtx {
     pub canonical_path: String,
     pub breadcrumbs: Vec<Crumb>,
     pub meta_description: String,
+    pub page_title: String,
+    pub copy: UiCopy,
 }
 
 #[derive(Serialize)]
@@ -74,4 +79,6 @@ pub struct VersionIndexCtx {
     pub canonical_path: String,
     pub breadcrumbs: Vec<Crumb>,
     pub meta_description: String,
+    pub page_title: String,
+    pub copy: UiCopy,
 }

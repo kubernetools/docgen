@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Kubernetools{% endblock %} | Kubernetes API Reference</title>
-  <meta name="description" content="{% block meta_description %}Kubernetes API Reference documentation{% endblock %}">
+  <title>{% block title %}{{ copy.site_name }} | {{ copy.site_tagline }}{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}{{ copy.default_meta_description }}{% endblock %}">
   <link rel="canonical" href="{{ canonical_path | safe }}">
   <script type="application/ld+json">{% block jsonld %}{}{% endblock %}</script>
   <style>
@@ -67,7 +67,7 @@
 </head>
 <body>
   <header>
-    <nav aria-label="Breadcrumb">
+    <nav aria-label="{{ copy.nav_label_breadcrumb }}">
       <ol>
         {% for crumb in breadcrumbs %}
         <li>
@@ -85,7 +85,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer>
-    <p>Kubernetools &mdash; Kubernetes API Reference</p>
+    <p>{{ copy.footer_text | safe }}</p>
   </footer>
 </body>
 </html>
