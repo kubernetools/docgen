@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Kubernetes {{ k8s_version_display }} API Reference{% endblock %}
+{% block title %}{{ page_title }}{% endblock %}
 
 {% block meta_description %}{{ meta_description }}{% endblock %}
 
 {% block content %}
-<h1>Kubernetes {{ k8s_version_display }} API Reference</h1>
-<nav aria-label="API groups">
+<h1>Kubernetes {{ k8s_version_display }} {{ copy.api_ref_label }}</h1>
+<nav aria-label="{{ copy.nav_label_api_groups }}">
   <ul>
     {% for group in groups %}
     <li><a href="{{ group.href | safe }}">{{ group.display }}</a></li>

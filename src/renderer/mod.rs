@@ -1,8 +1,10 @@
+mod copy;
 mod pages;
 mod sitemap;
 
 use crate::model::{FieldType, Resource};
 use anyhow::Result;
+use copy::UiCopy;
 use minijinja::Environment;
 use pages::*;
 use serde::Serialize;
@@ -101,17 +103,17 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             canonical_path: version_canonical_path,
             breadcrumbs: vec![
                 Crumb {
-                    label: "Docs".into(),
-                    href: "/docs/".into(),
+                    label: copy::BREADCRUMB_HOME.into(),
+                    href: "/".into(),
                 },
                 Crumb {
                     label: version_label.clone(),
                     href: format!("/docs/{nav_prefix}/"),
                 },
             ],
-            meta_description: format!(
-                "Complete Kubernetes {k8s_version} API reference documentation"
-            ),
+            meta_description: copy::meta_version_index(k8s_version),
+            page_title: copy::title_version_index(&version_label),
+            copy: UiCopy::new(),
         };
         write_html(
             &env,
@@ -156,8 +158,8 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                 canonical_path: group_canonical_path,
                 breadcrumbs: vec![
                     Crumb {
-                        label: "Docs".into(),
-                        href: "/docs/".into(),
+                        label: copy::BREADCRUMB_HOME.into(),
+                        href: "/".into(),
                     },
                     Crumb {
                         label: version_label.clone(),
@@ -168,7 +170,9 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                         href: format!("/docs/{nav_prefix}/{group}/"),
                     },
                 ],
-                meta_description: format!("{group} API resources for Kubernetes {k8s_version}"),
+                meta_description: copy::meta_group_index(group, k8s_version),
+                page_title: copy::title_group_index(group, &version_label),
+                copy: UiCopy::new(),
             };
             write_html(
                 &env,
@@ -208,17 +212,13 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                 let fields = order_fields(build_fields(&resource.fields));
                 let list_fields = order_fields(build_fields(&resource.list_fields));
 
-                let meta_description = format!(
-                    "Kubernetes {} API reference for {}. {}",
-                    resource.kind,
-                    k8s_version,
-                    resource.description.chars().take(120).collect::<String>()
-                );
+                let meta_description =
+                    copy::meta_resource(&resource.kind, k8s_version, &resource.description);
 
                 let json_ld = json!({
                     "@context": "https://schema.org",
-                    "@type": "TechArticle",
-                    "name": format!("{} — Kubernetes {} API Reference", resource.kind, k8s_version),
+                    "@type": copy::JSON_LD_TYPE,
+                    "name": copy::json_ld_name(&resource.kind, k8s_version),
                     "description": resource.description,
                     "url": canonical_url,
                 })
@@ -250,8 +250,8 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     json_ld,
                     breadcrumbs: vec![
                         Crumb {
-                            label: "Docs".into(),
-                            href: "/docs/".into(),
+                            label: copy::BREADCRUMB_HOME.into(),
+                            href: "/".into(),
                         },
                         Crumb {
                             label: version_label.clone(),
@@ -267,6 +267,13 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                         },
                     ],
                     meta_description,
+                    page_title: copy::title_resource(
+                        &resource.kind,
+                        &resource.api_version,
+                        group,
+                        &version_label,
+                    ),
+                    copy: UiCopy::new(),
                 };
                 write_html(
                     &env,
@@ -282,13 +289,16 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
     }
 
     if is_latest {
+        sitemap_urls.push(format!("{base_url}/"));
         // Evict all previous /docs/latest/ entries; each render fully replaces them.
         let evict_prefixes = vec![format!("{base_url}/docs/latest/")];
         sitemap::generate(&sitemap_urls, &out.join("sitemap.xml"), &evict_prefixes)?;
 
         fs::write(
             out.join("robots.txt"),
-            "User-agent: *\nAllow: /docs/latest/\nDisallow: /docs/v\n",
+            format!(
+                "User-agent: *\nAllow: /\nDisallow: /docs/v\n\nSitemap: {base_url}/sitemap.xml\n"
+            ),
         )?;
     }
 
@@ -584,6 +594,23 @@ mod tests {
     }
 
     #[test]
+    fn render_sitemap_includes_homepage() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
+        assert!(
+            sitemap.contains("<loc>https://example.com/</loc>"),
+            "sitemap must include the homepage URL"
+        );
+    }
+
+    #[test]
     fn render_writes_robots_txt() {
         let dir = tempfile::tempdir().unwrap();
         render(
@@ -594,8 +621,9 @@ mod tests {
         )
         .unwrap();
         let robots = std::fs::read_to_string(dir.path().join("robots.txt")).unwrap();
-        assert!(robots.contains("Allow: /docs/latest/"));
+        assert!(robots.contains("Allow: /"));
         assert!(robots.contains("Disallow: /docs/v"));
+        assert!(robots.contains("Sitemap: https://example.com/sitemap.xml"));
     }
 
     #[test]
@@ -614,7 +642,7 @@ mod tests {
             !robots.contains("old content"),
             "robots.txt must be overwritten"
         );
-        assert!(robots.contains("Allow: /docs/latest/"));
+        assert!(robots.contains("Allow: /"));
     }
 
     #[test]
@@ -783,6 +811,113 @@ mod tests {
         assert!(
             !dir.path().join("robots.txt").exists(),
             "robots.txt must not be written when not is_latest"
+        );
+    }
+
+    #[test]
+    fn render_home_breadcrumb_label_and_href() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        for path in [
+            "docs/latest/index.html",
+            "docs/latest/core/index.html",
+            "docs/latest/core/v1/pod/index.html",
+        ] {
+            let html = std::fs::read_to_string(dir.path().join(path)).unwrap();
+            assert!(
+                html.contains(r#"href="/">"#),
+                "{path}: Home breadcrumb must link to /"
+            );
+            assert!(
+                html.contains(">Home<"),
+                "{path}: Home breadcrumb label must be 'Home'"
+            );
+        }
+    }
+
+    #[test]
+    fn render_page_title_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains(
+                "<title>Pod v1 (core) &mdash; Kubernetes v1.33 (latest) | Kubernetes API Reference</title>"
+            ),
+            "resource page title must use &mdash; and correct format"
+        );
+    }
+
+    #[test]
+    fn render_page_title_group_index() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(dir.path().join("docs/latest/core/index.html")).unwrap();
+        assert!(
+            html.contains(
+                "<title>core &mdash; Kubernetes v1.33 (latest) API Reference | Kubernetes API Reference</title>"
+            ),
+            "group index title must use &mdash; and correct format"
+        );
+    }
+
+    #[test]
+    fn render_page_title_version_index() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
+        assert!(
+            html.contains(
+                "<title>Kubernetes v1.33 (latest) API Reference | Kubernetes API Reference</title>"
+            ),
+            "version index title must have correct format"
+        );
+    }
+
+    #[test]
+    fn render_json_ld_name_uses_unicode_em_dash() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("\"name\":\"Pod \u{2014} Kubernetes v1.33 API Reference\""),
+            "JSON-LD name must use Unicode em dash, not &mdash;"
+        );
+        assert!(
+            !html.contains("\"name\":\"Pod &mdash;"),
+            "JSON-LD name must not contain HTML entity &mdash;"
         );
     }
 }
