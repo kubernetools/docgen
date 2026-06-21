@@ -38,7 +38,7 @@ src/
     sitemap.rs     Pure-Rust sitemap.xml generation
 templates/
   base.html        DOCTYPE, <head>, breadcrumb nav, CSS, {% block content %}
-  resource.html    extends base — description, fields dl, list section, other-versions
+  resource.html    extends base — field_dl macro, fields / spec / status / list sections
   group_index.html extends base — one row per kind, all versions on same line
   version_index.html extends base — list of groups for a k8s version
 ```
@@ -53,6 +53,9 @@ templates/
 3. **Post-process** (still in parser):
    - `*List` resources are partitioned out, attached to their root (`PodList → Pod`),
      and removed from the top-level list.
+   - For each resource, if its `spec` or `status` field is a `$ref`, the referenced
+     schema's fields are extracted into `Resource.spec_fields` / `Resource.status_fields`
+     (see [Spec/Status sub-schemas](#specstatus-sub-schemas)).
    - Remaining resources are sorted by `kind`.
 4. **Render**: `renderer::render` writes index pages + one page per resource.
 
@@ -98,6 +101,35 @@ Each resource page shows a "Other versions:" line with linked badges for
 alternate API versions of the same kind + group. Older version pages exist and
 are fully rendered; they just aren't linked from the group index.
 
+### Spec/Status sub-schemas
+
+Resources whose `spec` or `status` field is a `$ref` to a sibling schema in the
+same file (e.g. `PodSpec`, `PodStatus`) get those fields extracted at parse time.
+
+**How it works in the parser** (`parser/mod.rs`):
+- Before iterating over schemas, a `by_short_name: HashMap<String, &RawSchema>` index
+  is built from the full schema map. The key is the last dotted component of the
+  schema name (`io.k8s.api.core.v1.PodSpec` → `PodSpec`), which matches what
+  `resolve::short_name()` returns from a `$ref` value.
+- For each resource, `sub_schema_fields("spec", …)` and `sub_schema_fields("status", …)`
+  look up the referenced schema and extract its fields and description into
+  `Resource.spec_fields` / `Resource.spec_description` (and status equivalents).
+- Resources with no `spec`/`status` field, or whose referenced schema is absent,
+  simply have empty `spec_fields`/`status_fields` — no special-casing needed.
+
+**How it appears in the renderer** (`renderer/mod.rs`):
+- `spec_fields` and `status_fields` are built into `FieldCtx` slices using the same
+  `build_fields` closure as the main and list fields.
+- The `spec` / `status` entries in the main resource fields get `type_href` overridden
+  to `#{kind_lower}spec` / `#{kind_lower}status` (in-page anchors) when the
+  corresponding sub-field slice is non-empty.
+
+**How it appears in the template** (`templates/resource.html`):
+- Two new `<section>` elements are rendered between the main fields section and the
+  list section, each with `id="{kind_lower}spec"` / `id="{kind_lower}status"`.
+- Both sections are conditional on `spec_fields` / `status_fields` being non-empty,
+  so resources like ConfigMap that have neither are unaffected.
+
 ### Field ordering on resource pages
 1. `apiVersion`, `kind`, `metadata` — always first, in that order
 2. Required fields — alphabetical
@@ -131,6 +163,15 @@ the field loop and branching before the normal `<dt>/<dd>` rendering.
   turning `/` into `&#x2f;`. Use a block `{% if %}…{% else %}…{% endif %}` with a
   literal `/` in the template body instead — literal characters are never escaped.
   Example: `{% if group == "core" %}{{ v }}{% else %}{{ group }}/{{ v }}{% endif %}`
+  `~` is safe for non-path strings (e.g. `kind ~ "List"` for section headings).
+- `resource.html` defines a `field_dl(fields, copy, group_display, api_version, kind_value)` macro
+  that renders a `<dl>` for any field list. `kind_value` controls apiVersion/kind
+  special-casing: pass `none` (default) for plain sections (spec, status), pass
+  `kind` for the resource section, or `kind ~ "List"` for the list section. This
+  avoids repeating the `<dt>`/`<dd>` rendering logic across four sections.
+- `ResourcePageCtx` passes `kind_lower` (the lowercased kind) to the template so
+  spec/status section anchor IDs (`id="podspec"`, `id="podstatus"`) can be built
+  without string manipulation in the template.
 - JSON-LD is pre-serialised in Rust (`serde_json::json!(...).to_string()`) and
   passed as a `String` field (`json_ld`) — minijinja 2 has no built-in `tojson` filter.
 - `components` and `schemas` are `Option<…>` because many spec files are
