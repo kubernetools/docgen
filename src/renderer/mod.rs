@@ -209,8 +209,18 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                         })
                         .collect()
                 };
-                let fields = order_fields(build_fields(&resource.fields));
+                let mut fields = order_fields(build_fields(&resource.fields));
+                // Link spec/status type labels to their in-page section anchors.
+                for f in &mut fields {
+                    if f.name == "spec" && !resource.spec_fields.is_empty() {
+                        f.type_href = Some(format!("#{kind_lower}spec"));
+                    } else if f.name == "status" && !resource.status_fields.is_empty() {
+                        f.type_href = Some(format!("#{kind_lower}status"));
+                    }
+                }
                 let list_fields = order_fields(build_fields(&resource.list_fields));
+                let spec_fields = order_fields(build_fields(&resource.spec_fields));
+                let status_fields = order_fields(build_fields(&resource.status_fields));
 
                 let meta_description =
                     copy::meta_resource(&resource.kind, k8s_version, &resource.description);
@@ -236,6 +246,7 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
 
                 let ctx = ResourcePageCtx {
                     kind: resource.kind.clone(),
+                    kind_lower: kind_lower.clone(),
                     group_display: group.clone(),
                     api_version: resource.api_version.clone(),
                     k8s_version: k8s_version.clone(),
@@ -244,6 +255,10 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     fields,
                     list_description: resource.list_description.clone(),
                     list_fields,
+                    spec_description: resource.spec_description.clone(),
+                    spec_fields,
+                    status_description: resource.status_description.clone(),
+                    status_fields,
                     other_versions,
                     canonical_url,
                     canonical_path,
@@ -499,6 +514,10 @@ mod tests {
             fields: vec![],
             list_description: String::new(),
             list_fields: vec![],
+            spec_description: String::new(),
+            spec_fields: vec![],
+            status_description: String::new(),
+            status_fields: vec![],
         };
         assert_eq!(resource_path(&r, "v1.33"), "/docs/v1.33/core/v1/pod/");
         assert_eq!(resource_path(&r, "latest"), "/docs/latest/core/v1/pod/");
@@ -516,6 +535,10 @@ mod tests {
             fields: vec![],
             list_description: String::new(),
             list_fields: vec![],
+            spec_description: String::new(),
+            spec_fields: vec![],
+            status_description: String::new(),
+            status_fields: vec![],
         };
         assert_eq!(
             resource_path(&r, "v1.33"),
@@ -537,6 +560,10 @@ mod tests {
             fields: vec![],
             list_description: String::new(),
             list_fields: vec![],
+            spec_description: String::new(),
+            spec_fields: vec![],
+            status_description: String::new(),
+            status_fields: vec![],
         }
     }
 
@@ -970,6 +997,10 @@ mod tests {
             )],
             list_description: String::new(),
             list_fields: vec![],
+            spec_description: String::new(),
+            spec_fields: vec![],
+            status_description: String::new(),
+            status_fields: vec![],
         };
         render(&[r], dir.path(), "https://example.com", true).unwrap();
         let html =
@@ -1027,6 +1058,159 @@ mod tests {
         assert!(
             !html.contains("Kind is a string value representing the REST resource."),
             "list kind must not render its description"
+        );
+    }
+
+    fn ref_field(name: &str, ref_type: &str, description: &str) -> crate::model::Field {
+        crate::model::Field {
+            name: name.into(),
+            description: description.into(),
+            required: false,
+            field_type: crate::model::FieldType::Ref(ref_type.into()),
+        }
+    }
+
+    #[test]
+    fn spec_section_renders_when_spec_fields_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.spec_description = "PodSpec is a description of a pod.".into();
+        r.spec_fields = vec![
+            model_field("nodeName", "Name of the node."),
+            model_field("restartPolicy", "Restart policy."),
+        ];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains(r#"id="podspec""#),
+            "spec section must have id=podspec"
+        );
+        assert!(html.contains("PodSpec"), "spec heading must say PodSpec");
+        assert!(
+            html.contains("PodSpec is a description of a pod."),
+            "spec description must be rendered"
+        );
+        assert!(
+            html.contains("nodeName"),
+            "spec field nodeName must be rendered"
+        );
+        assert!(
+            html.contains("restartPolicy"),
+            "spec field restartPolicy must be rendered"
+        );
+    }
+
+    #[test]
+    fn status_section_renders_when_status_fields_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.status_description = "PodStatus represents the status of a pod.".into();
+        r.status_fields = vec![
+            model_field("hostIP", "IP address of the host."),
+            model_field("phase", "Phase of the pod."),
+        ];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains(r#"id="podstatus""#),
+            "status section must have id=podstatus"
+        );
+        assert!(
+            html.contains("PodStatus"),
+            "status heading must say PodStatus"
+        );
+        assert!(
+            html.contains("PodStatus represents the status of a pod."),
+            "status description must be rendered"
+        );
+        assert!(
+            html.contains("phase"),
+            "status field phase must be rendered"
+        );
+    }
+
+    #[test]
+    fn spec_type_href_links_to_in_page_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![ref_field("spec", "PodSpec", "Spec of the pod.")];
+        r.spec_fields = vec![model_field("nodeName", "Name of the node.")];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("href=\"#podspec\""),
+            "spec field type must link to #podspec"
+        );
+    }
+
+    #[test]
+    fn status_type_href_links_to_in_page_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![ref_field("status", "PodStatus", "Status of the pod.")];
+        r.status_fields = vec![model_field("phase", "Phase of the pod.")];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("href=\"#podstatus\""),
+            "status field type must link to #podstatus"
+        );
+    }
+
+    #[test]
+    fn spec_type_href_not_set_when_spec_fields_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![ref_field("spec", "PodSpec", "Spec of the pod.")];
+        // spec_fields left empty — no anchor should be generated
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            !html.contains("href=\"#podspec\""),
+            "spec field must not link to anchor when spec_fields is empty"
+        );
+    }
+
+    #[test]
+    fn no_spec_or_status_section_for_resources_without_sub_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("ConfigMap")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/configmap/index.html"))
+                .unwrap();
+        assert!(
+            !html.contains("ConfigMapSpec"),
+            "no spec section for resources without spec_fields"
+        );
+        assert!(
+            !html.contains("ConfigMapStatus"),
+            "no status section for resources without status_fields"
+        );
+    }
+
+    #[test]
+    fn spec_section_anchor_uses_lowercase_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("ReplicaSet");
+        r.spec_fields = vec![model_field("replicas", "Number of replicas.")];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/replicaset/index.html"))
+                .unwrap();
+        assert!(
+            html.contains(r#"id="replicasetspec""#),
+            "spec section id must be lowercase kind + spec"
         );
     }
 }

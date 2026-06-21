@@ -19,6 +19,7 @@ pub struct FieldCtx {
 #[derive(Serialize)]
 pub struct ResourcePageCtx {
     pub kind: String,
+    pub kind_lower: String,
     pub group_display: String,
     pub api_version: String,
     pub k8s_version: String,
@@ -27,6 +28,10 @@ pub struct ResourcePageCtx {
     pub fields: Vec<FieldCtx>,
     pub list_description: String,
     pub list_fields: Vec<FieldCtx>,
+    pub spec_description: String,
+    pub spec_fields: Vec<FieldCtx>,
+    pub status_description: String,
+    pub status_fields: Vec<FieldCtx>,
     pub other_versions: Vec<VersionLink>,
     pub canonical_url: String,
     pub canonical_path: String,

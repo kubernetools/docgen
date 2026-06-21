@@ -81,11 +81,15 @@ carry a canonical pointing to their `/docs/latest/` counterpart.
    `apiVersion` and `kind` are rendered specially: instead of their OpenAPI type
    and description, the second column shows the actual value (`v1` / `apps/v1`
    for `apiVersion`; the resource or list kind name for `kind`).
+   Resources whose `spec` or `status` field references a sibling schema (e.g.
+   `PodSpec`, `PodStatus`) get dedicated sections on the page with those fields
+   listed, and the `spec`/`status` type labels in the main fields section link to
+   those sections.
 
 ## Development
 
 ```bash
-cargo test       # run all unit tests (58 tests, no network required)
+cargo test       # run all unit tests (70 tests, no network required)
 cargo clippy     # lint
 ```
 

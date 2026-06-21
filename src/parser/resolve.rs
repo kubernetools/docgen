@@ -31,7 +31,7 @@ pub fn resolve_field_type(prop: &RawProperty) -> FieldType {
     FieldType::Object
 }
 
-fn short_name(ref_: &str) -> String {
+pub(super) fn short_name(ref_: &str) -> String {
     // "#/components/schemas/io.k8s.api.core.v1.Pod" → "Pod"
     ref_.rsplit('/')
         .next()
