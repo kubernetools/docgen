@@ -10,8 +10,11 @@ pub const FOOTER_TEXT: &str = "Kubernetools &mdash; Kubernetes API Reference";
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 pub const NAV_LABEL_BREADCRUMB: &str = "Breadcrumb";
-pub const NAV_LABEL_API_GROUPS: &str = "API groups";
+pub const NAV_LABEL_API_GROUPS: &str = "API Groups";
 pub const BREADCRUMB_HOME: &str = "Home";
+pub const BREADCRUMB_COMMON_DEFS: &str = "Common Definitions";
+pub const SECTION_BY_GROUP: &str = "API Resources by Group";
+pub const SECTION_DEFINITIONS: &str = "Definitions";
 
 // ── Resource page labels ──────────────────────────────────────────────────────
 pub const LABEL_OTHER_VERSIONS: &str = "Other versions:";
@@ -37,6 +40,26 @@ pub fn title_resource(
 ) -> String {
     format!(
         "{kind} {api_version} ({group}) &mdash; Kubernetes {k8s_version_display} | {SITE_TAGLINE}"
+    )
+}
+
+// ── Common definitions ────────────────────────────────────────────────────────
+pub fn title_common_defs_index(k8s_version_display: &str) -> String {
+    format!("Common Definitions &mdash; Kubernetes {k8s_version_display} | {SITE_TAGLINE}")
+}
+
+pub fn title_common_def(name: &str, k8s_version_display: &str) -> String {
+    format!("{name} &mdash; Kubernetes {k8s_version_display} | {SITE_TAGLINE}")
+}
+
+pub fn meta_common_defs_index(k8s_version: &str) -> String {
+    format!("Common type definitions shared across Kubernetes {k8s_version} API resources")
+}
+
+pub fn meta_common_def(name: &str, k8s_version: &str, description: &str) -> String {
+    format!(
+        "Kubernetes {name} common definition for {k8s_version}. {}",
+        description.chars().take(120).collect::<String>()
     )
 }
 
@@ -75,6 +98,9 @@ pub struct UiCopy {
     pub nav_label_breadcrumb: &'static str,
     pub nav_label_api_groups: &'static str,
     pub breadcrumb_home: &'static str,
+    pub breadcrumb_common_defs: &'static str,
+    pub section_by_group: &'static str,
+    pub section_definitions: &'static str,
     pub label_other_versions: &'static str,
     pub heading_fields: &'static str,
     pub msg_no_description: &'static str,
@@ -93,6 +119,9 @@ impl UiCopy {
             nav_label_breadcrumb: NAV_LABEL_BREADCRUMB,
             nav_label_api_groups: NAV_LABEL_API_GROUPS,
             breadcrumb_home: BREADCRUMB_HOME,
+            breadcrumb_common_defs: BREADCRUMB_COMMON_DEFS,
+            section_by_group: SECTION_BY_GROUP,
+            section_definitions: SECTION_DEFINITIONS,
             label_other_versions: LABEL_OTHER_VERSIONS,
             heading_fields: HEADING_FIELDS,
             msg_no_description: MSG_NO_DESCRIPTION,

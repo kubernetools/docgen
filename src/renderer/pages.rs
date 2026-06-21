@@ -2,6 +2,40 @@ use super::copy::UiCopy;
 use serde::Serialize;
 
 #[derive(Serialize)]
+pub struct CommonDefLink {
+    pub name: String,
+    pub href: String,
+}
+
+#[derive(Serialize)]
+pub struct CommonDefPageCtx {
+    pub name: String,
+    pub description: String,
+    pub fields: Vec<FieldCtx>,
+    pub k8s_version: String,
+    pub k8s_version_display: String,
+    pub canonical_url: String,
+    pub canonical_path: String,
+    pub breadcrumbs: Vec<Crumb>,
+    pub meta_description: String,
+    pub page_title: String,
+    pub copy: UiCopy,
+}
+
+#[derive(Serialize)]
+pub struct CommonDefsIndexCtx {
+    pub k8s_version: String,
+    pub k8s_version_display: String,
+    pub definitions: Vec<CommonDefLink>,
+    pub canonical_url: String,
+    pub canonical_path: String,
+    pub breadcrumbs: Vec<Crumb>,
+    pub meta_description: String,
+    pub page_title: String,
+    pub copy: UiCopy,
+}
+
+#[derive(Serialize)]
 pub struct Crumb {
     pub label: String,
     pub href: String,
@@ -80,6 +114,7 @@ pub struct VersionIndexCtx {
     pub k8s_version: String,
     pub k8s_version_display: String,
     pub groups: Vec<GroupLink>,
+    pub definitions: Vec<GroupLink>,
     pub canonical_url: String,
     pub canonical_path: String,
     pub breadcrumbs: Vec<Crumb>,

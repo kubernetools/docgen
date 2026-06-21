@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title | safe }}{% endblock %}
+
+{% block meta_description %}{{ meta_description }}{% endblock %}
+
+{% block content %}
+<h1>{{ copy.breadcrumb_common_defs }} <span class="badge">{{ k8s_version_display }}</span></h1>
+<nav aria-label="Common definitions">
+  <ul>
+    {% for def in definitions %}
+    <li><a href="{{ def.href | safe }}">{{ def.name }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endblock %}

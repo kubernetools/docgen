@@ -1,4 +1,12 @@
 #[derive(Clone)]
+pub struct CommonDefinition {
+    pub name: String,
+    pub description: String,
+    pub fields: Vec<Field>,
+    pub k8s_version: String,
+}
+
+#[derive(Clone)]
 pub struct Resource {
     pub kind: String,
     pub group: String,
