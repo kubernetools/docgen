@@ -61,3 +61,8 @@ sitemap_urls.push(format!("{base_url}/path/to/"));
 - Breadcrumbs: last crumb has no href (rendered as `<span aria-current="page">`
   by `base.html`). Always provide at least `[Docs → /docs/]`.
 - The `write_html` helper creates parent directories automatically.
+- **Never use `~` to concatenate strings that contain `/`** (e.g. building a
+  `group/version` path). The result is treated as a template variable and
+  auto-escaped, turning `/` into `&#x2f;`. Use a block `{% if %}…{% else %}…{% endif %}`
+  with a literal `/` in the template body, or pipe the whole expression through `| safe`
+  only if you are certain the value is already safe.

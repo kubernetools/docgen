@@ -106,6 +106,18 @@ are fully rendered; they just aren't linked from the group index.
 Required fields get `class="req"` on their `<dt>`, which CSS renders with a
 trailing `*` via `dt.req::after { content: " *"; }`.
 
+### Special rendering for `apiVersion` and `kind`
+These two fields are not rendered like ordinary fields. Instead of showing the
+type (`string`) and the OpenAPI description, the template shows:
+
+| Field        | `<dt>` (first column) | `<dd>` (second column)                            |
+|--------------|------------------------|---------------------------------------------------|
+| `apiVersion` | `apiVersion`           | actual value: `v1` (core) or `group/version` (named group) |
+| `kind`       | `kind`                 | actual kind name (e.g. `Pod`); `KindList` in the list section |
+
+This is implemented in `templates/resource.html` by checking `field.name` inside
+the field loop and branching before the normal `<dt>/<dd>` rendering.
+
 ### URL scheme
 - Navigation hrefs are root-relative: `/docs/{k8s_version}/{group}/{api_version}/{kind_lower}/`
 - Core group maps to `"core"` in the URL segment.
@@ -114,6 +126,11 @@ trailing `*` via `dt.req::after { content: " *"; }`.
 ### Templates
 - Engine: **minijinja 2** — templates embedded via `include_str!` (binary is self-contained).
 - All URL values in templates need `| safe` to prevent `/` being escaped to `&#x2f;`.
+- **Do not use `~` (string concatenation) to build paths containing `/`.**
+  The concatenated string is treated as a template variable and gets auto-escaped,
+  turning `/` into `&#x2f;`. Use a block `{% if %}…{% else %}…{% endif %}` with a
+  literal `/` in the template body instead — literal characters are never escaped.
+  Example: `{% if group == "core" %}{{ v }}{% else %}{{ group }}/{{ v }}{% endif %}`
 - JSON-LD is pre-serialised in Rust (`serde_json::json!(...).to_string()`) and
   passed as a `String` field (`json_ld`) — minijinja 2 has no built-in `tojson` filter.
 - `components` and `schemas` are `Option<…>` because many spec files are
