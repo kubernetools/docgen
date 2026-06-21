@@ -20,13 +20,16 @@ asked to "build", "regenerate", or "rebuild the site".
 2. **Wipe and regenerate**:
 
    ```bash
-   rm -rf ./site && cargo run --release -- generate --k8s-version v1.33 --out ./site
+   rm -rf ./site && cargo run --release -- generate --k8s-version v1.36 --out ./site
    ```
 
 3. **Verify**:
    - Output ends with `Generated N resource pages + index pages + sitemap.xml`
-   - Spot-check: `./site/docs/v1.33/core/v1/pod/index.html` exists and contains
+   - Spot-check: `./site/docs/v1.36/core/v1/pod/index.html` exists and contains
      `<h1>Pod` and a `<dl>` of fields.
+   - Check `apiVersion`/`kind` rendering: the Pod page must contain
+     `<code>v1</code>` (not `string`) for `apiVersion`, and `<code>Pod</code>`
+     for `kind`. A named-group resource (e.g. Deployment) must show `<code>apps/v1</code>`.
    - Confirm no stale list pages: `find ./site -name "*list*"` should return nothing.
 
 ## Common pitfalls

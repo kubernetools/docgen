@@ -78,11 +78,14 @@ carry a canonical pointing to their `/docs/latest/` counterpart.
 3. **Render** — writes HTML pages via embedded [minijinja](https://docs.rs/minijinja)
    templates. Fields are ordered: `apiVersion` / `kind` / `metadata` first, then
    required fields alphabetically, then optional fields alphabetically.
+   `apiVersion` and `kind` are rendered specially: instead of their OpenAPI type
+   and description, the second column shows the actual value (`v1` / `apps/v1`
+   for `apiVersion`; the resource or list kind name for `kind`).
 
 ## Development
 
 ```bash
-cargo test       # run all unit tests (37 tests, no network required)
+cargo test       # run all unit tests (58 tests, no network required)
 cargo clippy     # lint
 ```
 

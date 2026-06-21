@@ -540,6 +540,15 @@ mod tests {
         }
     }
 
+    fn model_field(name: &str, description: &str) -> crate::model::Field {
+        crate::model::Field {
+            name: name.into(),
+            description: description.into(),
+            required: false,
+            field_type: crate::model::FieldType::Scalar("string".into()),
+        }
+    }
+
     #[test]
     fn render_evicts_stale_sitemap_entries_on_regeneration() {
         let dir = tempfile::tempdir().unwrap();
@@ -918,6 +927,106 @@ mod tests {
         assert!(
             !html.contains("\"name\":\"Pod &mdash;"),
             "JSON-LD name must not contain HTML entity &mdash;"
+        );
+    }
+
+    #[test]
+    fn apiversion_field_core_shows_version_value_not_type_or_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![model_field(
+            "apiVersion",
+            "APIVersion defines the versioned schema.",
+        )];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("<code>v1</code>"),
+            "apiVersion must show the api version value for core resources"
+        );
+        assert!(
+            !html.contains(r#"apiVersion<span class="type">"#),
+            "apiVersion must not render a type span"
+        );
+        assert!(
+            !html.contains("APIVersion defines the versioned schema."),
+            "apiVersion must not render its description"
+        );
+    }
+
+    #[test]
+    fn apiversion_field_named_group_shows_group_slash_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = crate::model::Resource {
+            kind: "Deployment".into(),
+            group: "apps".into(),
+            api_version: "v1".into(),
+            k8s_version: "v1.33".into(),
+            description: String::new(),
+            fields: vec![model_field(
+                "apiVersion",
+                "APIVersion defines the versioned schema.",
+            )],
+            list_description: String::new(),
+            list_fields: vec![],
+        };
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/apps/v1/deployment/index.html"))
+                .unwrap();
+        assert!(
+            html.contains("<code>apps/v1</code>"),
+            "apiVersion must show group/version for named-group resources"
+        );
+    }
+
+    #[test]
+    fn kind_field_shows_resource_kind_name_not_type_or_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![model_field(
+            "kind",
+            "Kind is a string value representing the REST resource.",
+        )];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("<code>Pod</code>"),
+            "kind must show the resource kind name"
+        );
+        assert!(
+            !html.contains(r#"kind<span class="type">"#),
+            "kind must not render a type span"
+        );
+        assert!(
+            !html.contains("Kind is a string value representing the REST resource."),
+            "kind must not render its description"
+        );
+    }
+
+    #[test]
+    fn list_kind_field_shows_kind_list_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.list_fields = vec![
+            model_field("apiVersion", "APIVersion defines the versioned schema."),
+            model_field(
+                "kind",
+                "Kind is a string value representing the REST resource.",
+            ),
+        ];
+        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("<code>PodList</code>"),
+            "list kind must show the kind name suffixed with List"
+        );
+        assert!(
+            !html.contains("Kind is a string value representing the REST resource."),
+            "list kind must not render its description"
         );
     }
 }

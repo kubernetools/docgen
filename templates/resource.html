@@ -24,10 +24,18 @@
     {% if fields %}
     <dl>
       {% for field in fields %}
+      {% if field.name == "apiVersion" %}
+      <dt>apiVersion</dt>
+      <dd><code>{% if group_display == "core" %}{{ api_version }}{% else %}{{ group_display }}/{{ api_version }}{% endif %}</code></dd>
+      {% elif field.name == "kind" %}
+      <dt>kind</dt>
+      <dd><code>{{ kind }}</code></dd>
+      {% else %}
       <dt{% if field.required %} class="req"{% endif %}>
         {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
       </dt>
       <dd>{{ field.description if field.description else copy.msg_no_description }}</dd>
+      {% endif %}
       {% endfor %}
     </dl>
     {% else %}
@@ -42,10 +50,18 @@
     {% endif %}
     <dl>
       {% for field in list_fields %}
+      {% if field.name == "apiVersion" %}
+      <dt>apiVersion</dt>
+      <dd><code>{% if group_display == "core" %}{{ api_version }}{% else %}{{ group_display }}/{{ api_version }}{% endif %}</code></dd>
+      {% elif field.name == "kind" %}
+      <dt>kind</dt>
+      <dd><code>{{ kind }}List</code></dd>
+      {% else %}
       <dt{% if field.required %} class="req"{% endif %}>
         {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
       </dt>
       <dd>{{ field.description if field.description else copy.msg_no_description }}</dd>
+      {% endif %}
       {% endfor %}
     </dl>
   </section>
