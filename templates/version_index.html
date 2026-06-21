@@ -6,11 +6,26 @@
 
 {% block content %}
 <h1>Kubernetes {{ k8s_version_display }} {{ copy.api_ref_label }}</h1>
-<nav aria-label="{{ copy.nav_label_api_groups }}">
-  <ul>
-    {% for group in groups %}
-    <li><a href="{{ group.href | safe }}">{{ group.display }}</a></li>
-    {% endfor %}
-  </ul>
-</nav>
+<section aria-labelledby="by-group-heading">
+  <h2 id="by-group-heading">{{ copy.section_by_group }}</h2>
+  <nav aria-label="{{ copy.nav_label_api_groups }}">
+    <ul>
+      {% for group in groups %}
+      <li><a href="{{ group.href | safe }}">{{ group.display }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+</section>
+{% if definitions %}
+<section aria-labelledby="definitions-heading">
+  <h2 id="definitions-heading">{{ copy.section_definitions }}</h2>
+  <nav aria-label="{{ copy.section_definitions }}">
+    <ul>
+      {% for def in definitions %}
+      <li><a href="{{ def.href | safe }}">{{ def.display }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+</section>
+{% endif %}
 {% endblock %}

@@ -27,20 +27,22 @@ src/
   main.rs          Entry: parse CLI, drive async runtime
   cli.rs           clap Cli / Commands (Generate subcommand)
   fetcher.rs       GitHub Contents API → download *_openapi.json files
-  model.rs         Public data types: Resource, Field, FieldType
+  model.rs         Public data types: Resource, CommonDefinition, Field, FieldType
   parser/
-    mod.rs         Orchestrate: per-file parse → post-process → Vec<Resource>
+    mod.rs         Orchestrate: per-file parse → post-process → (Vec<Resource>, Vec<CommonDefinition>)
     schema.rs      serde structs for raw OpenAPI (RawSpec, RawSchema, RawProperty, RawGVK)
     resolve.rs     $ref / allOf resolution → FieldType; short_name() strips schema prefix
   renderer/
     mod.rs         minijinja env setup, page dispatch, helper functions
-    pages.rs       Context structs passed to templates (ResourcePageCtx, GroupIndexCtx, …)
+    pages.rs       Context structs passed to templates (ResourcePageCtx, GroupIndexCtx, CommonDefPageCtx, …)
     sitemap.rs     Pure-Rust sitemap.xml generation
 templates/
-  base.html        DOCTYPE, <head>, breadcrumb nav, CSS, {% block content %}
-  resource.html    extends base — field_dl macro, fields / spec / status / list sections
-  group_index.html extends base — one row per kind, all versions on same line
-  version_index.html extends base — list of groups for a k8s version
+  base.html              DOCTYPE, <head>, breadcrumb nav, CSS, {% block content %}
+  resource.html          extends base — field_dl macro, fields / spec / status / list sections
+  group_index.html       extends base — one row per kind, all versions on same line
+  version_index.html     extends base — list of groups for a k8s version
+  common_def.html        extends base — name, description, and fields for a single common definition
+  common_defs_index.html extends base — listing of all referenced common definitions for a k8s version
 ```
 
 ## Data flow
@@ -56,8 +58,12 @@ templates/
    - For each resource, if its `spec` or `status` field is a `$ref`, the referenced
      schema's fields are extracted into `Resource.spec_fields` / `Resource.status_fields`
      (see [Spec/Status sub-schemas](#specstatus-sub-schemas)).
-   - Remaining resources are sorted by `kind`.
-4. **Render**: `renderer::render` writes index pages + one page per resource.
+   - Schemas whose short name is in `COMMON_DEF_NAMES` are extracted as
+     `CommonDefinition` values. During field building, `collect_common_def_refs`
+     records which of those names appear as `Ref` or `Array(Ref(...))` field types
+     in any resource; `parse_specs` retains only the referenced subset.
+   - Remaining resources are sorted by `kind`; common definitions are sorted by `name`.
+4. **Render**: `renderer::render` writes index pages + one page per resource + common definition pages.
 
 ## Key design decisions
 
@@ -100,6 +106,31 @@ to avoid duplicate-content SEO issues.
 Each resource page shows a "Other versions:" line with linked badges for
 alternate API versions of the same kind + group. Older version pages exist and
 are fully rendered; they just aren't linked from the group index.
+
+### Common definitions
+
+Kubernetes has a set of shared utility types (e.g. `ObjectMeta`, `LabelSelector`)
+listed at https://web.archive.org/web/20240227200353/https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/
+that appear as field types across many resources. They have no
+`x-kubernetes-group-version-kind` entry and do not belong to a specific API group.
+
+**Candidate list** — `COMMON_DEF_NAMES` in `parser/mod.rs` lists 13 names sourced
+from the above URL. All 13 are extracted from spec files into `Vec<CommonDefinition>`
+via a second pass in `parse_spec_file`. `emitted_common` deduplicates them across
+files (spec files are self-contained, so each schema appears in many files with
+identical content; the first occurrence wins).
+
+**Filtering** — only definitions actually referenced as a `Ref` or `Array(Ref(…))`
+field type in at least one resource (main, spec, status, or list fields) are kept.
+This is tracked by `collect_common_def_refs`, called during field building inside
+`parse_spec_file`, and `parse_specs` calls `common_defs.retain(…)` before returning.
+The rationale: don't generate pages with no inbound links.
+
+**Rendering** — `common_def_paths` (built from all passed `CommonDefinition` values)
+is checked before `kind_paths` in `build_fields_ctx`, so a field of type `Status`
+links to the common-definition page even if a resource page also exists.
+The version index lists `common-definitions` as a group alongside regular API groups.
+Pages and the index are added to the sitemap when `is_latest=true`.
 
 ### Spec/Status sub-schemas
 
@@ -155,6 +186,18 @@ the field loop and branching before the normal `<dt>/<dd>` rendering.
 - Core group maps to `"core"` in the URL segment.
 - `--base-url` is used only for canonical `<link>` tags, JSON-LD, and sitemap.
 
+### Literal text and copy
+
+All user-visible strings — page titles, meta descriptions, heading labels, breadcrumb
+labels, UI messages, and any other text that could affect SEO or be translated — must
+live in `src/renderer/copy.rs`, not be hardcoded in `renderer/mod.rs` or templates.
+
+- **SEO strings** (page titles, meta descriptions, JSON-LD): add a `pub fn` in `copy.rs`.
+- **Static labels** (breadcrumbs, headings, button text): add a `pub const` in `copy.rs`
+  and expose it through `UiCopy` so templates can access it via `{{ copy.field_name }}`.
+- **In `renderer/mod.rs`**: reference constants as `copy::CONSTANT_NAME`, never inline strings.
+- **In templates**: reference labels via `{{ copy.field_name }}`, never hardcode English text.
+
 ### Templates
 - Engine: **minijinja 2** — templates embedded via `include_str!` (binary is self-contained).
 - All URL values in templates need `| safe` to prevent `/` being escaped to `&#x2f;`.
@@ -179,9 +222,11 @@ the field loop and branching before the normal `<dt>/<dd>` rendering.
 
 ## Output layout
 
-| Page            | Path                                                               |
-|-----------------|--------------------------------------------------------------------|
-| Version index   | `{out}/docs/{k8s_version}/index.html`                             |
-| Group index     | `{out}/docs/{k8s_version}/{group}/index.html`                     |
-| Resource page   | `{out}/docs/{k8s_version}/{group}/{api_version}/{kind}/index.html`|
-| Sitemap         | `{out}/sitemap.xml`                                               |
+| Page                 | Path                                                                    |
+|----------------------|-------------------------------------------------------------------------|
+| Version index        | `{out}/docs/{k8s_version}/index.html`                                   |
+| Group index          | `{out}/docs/{k8s_version}/{group}/index.html`                           |
+| Resource page        | `{out}/docs/{k8s_version}/{group}/{api_version}/{kind}/index.html`      |
+| Common defs index    | `{out}/docs/{k8s_version}/common-definitions/index.html`                |
+| Common def page      | `{out}/docs/{k8s_version}/common-definitions/{name_lower}/index.html`   |
+| Sitemap              | `{out}/sitemap.xml`                                                     |

@@ -59,6 +59,10 @@ site/
           ...
       apps/
         ...
+      common-definitions/
+        index.html             # listing of all referenced common definitions
+        objectmeta/index.html  # one page per referenced common definition
+        ...
   sitemap.xml
   robots.txt
 ```
@@ -74,7 +78,9 @@ carry a canonical pointing to their `/docs/latest/` counterpart.
 2. **Parse** — extracts schemas with `x-kubernetes-group-version-kind`,
    deduplicating cross-cutting types (e.g. `DeleteOptions`) that appear in every
    spec file. `*List` kinds are attached to their root resource and not rendered
-   as standalone pages.
+   as standalone pages. A fixed list of well-known shared types (e.g. `ObjectMeta`,
+   `LabelSelector`) is also extracted as *common definitions* — but only those
+   actually referenced as field types in at least one resource are kept.
 3. **Render** — writes HTML pages via embedded [minijinja](https://docs.rs/minijinja)
    templates. Fields are ordered: `apiVersion` / `kind` / `metadata` first, then
    required fields alphabetically, then optional fields alphabetically.
@@ -85,11 +91,14 @@ carry a canonical pointing to their `/docs/latest/` counterpart.
    `PodSpec`, `PodStatus`) get dedicated sections on the page with those fields
    listed, and the `spec`/`status` type labels in the main fields section link to
    those sections.
+   Common definition types referenced by resource fields get their own pages at
+   `/docs/{version}/common-definitions/{name}/`, with a listing page at
+   `/docs/{version}/common-definitions/`.
 
 ## Development
 
 ```bash
-cargo test       # run all unit tests (70 tests, no network required)
+cargo test       # run all unit tests (82 tests, no network required)
 cargo clippy     # lint
 ```
 

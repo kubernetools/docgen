@@ -1,19 +1,51 @@
 mod resolve;
 mod schema;
 
-use crate::model::{Field, Resource};
+use crate::model::{CommonDefinition, Field, Resource};
 use anyhow::{Context, Result};
 use schema::RawSpec;
 use serde_json::Value;
 use std::collections::HashSet;
 
-pub fn parse_specs(specs: Vec<(String, Value)>, k8s_version: &str) -> Result<Vec<Resource>> {
+/// Common Kubernetes type definitions shared across many resources, as listed on
+/// https://web.archive.org/web/20240227200353/https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/
+const COMMON_DEF_NAMES: &[&str] = &[
+    "DeleteOptions",
+    "LabelSelector",
+    "ListMeta",
+    "LocalObjectReference",
+    "NodeSelectorRequirement",
+    "ObjectFieldSelector",
+    "ObjectMeta",
+    "ObjectReference",
+    "Patch",
+    "Quantity",
+    "ResourceFieldSelector",
+    "Status",
+    "TypedLocalObjectReference",
+];
+
+struct ParseState<'a> {
+    emitted: &'a mut HashSet<String>,
+    emitted_common: &'a mut HashSet<String>,
+    referenced_common: &'a mut HashSet<String>,
+    resources: &'a mut Vec<Resource>,
+    common_defs: &'a mut Vec<CommonDefinition>,
+}
+
+pub fn parse_specs(
+    specs: Vec<(String, Value)>,
+    k8s_version: &str,
+) -> Result<(Vec<Resource>, Vec<CommonDefinition>)> {
     let mut resources = Vec::new();
+    let mut common_defs = Vec::new();
     // Track which schema names have already produced a resource.  Each schema
     // definition appears in every spec file that references it (the files are
     // self-contained), so without this guard types like DeleteOptions — which
     // carry a GVK entry for every API group — would generate one page per file.
     let mut emitted: HashSet<String> = HashSet::new();
+    let mut emitted_common: HashSet<String> = HashSet::new();
+    let mut referenced_common: HashSet<String> = HashSet::new();
 
     for (filename, value) in specs {
         // Only process versioned group files: api__v1 or apis__<group>__<version>.
@@ -27,8 +59,13 @@ pub fn parse_specs(specs: Vec<(String, Value)>, k8s_version: &str) -> Result<Vec
             k8s_version,
             &file_group,
             &file_version,
-            &mut emitted,
-            &mut resources,
+            &mut ParseState {
+                emitted: &mut emitted,
+                emitted_common: &mut emitted_common,
+                referenced_common: &mut referenced_common,
+                resources: &mut resources,
+                common_defs: &mut common_defs,
+            },
         );
     }
 
@@ -43,13 +80,19 @@ pub fn parse_specs(specs: Vec<(String, Value)>, k8s_version: &str) -> Result<Vec
             r.kind == root_kind && r.group == list.group && r.api_version == list.api_version
         }) {
             root.list_description = list.description;
+            // Collect common def refs from list fields (merged after the main loop).
+            collect_common_def_refs(&list.fields, &mut referenced_common);
             root.list_fields = list.fields;
         }
         // Lists with no matching root (e.g. APIResourceList) are simply dropped.
     }
 
+    // Keep only common definitions that are actually referenced in resource fields.
+    common_defs.retain(|cd| referenced_common.contains(&cd.name));
+
     roots.sort_by(|a, b| a.kind.cmp(&b.kind));
-    Ok(roots)
+    common_defs.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok((roots, common_defs))
 }
 
 /// Derives (group, version) from a spec filename.
@@ -157,7 +200,7 @@ mod tests {
     #[test]
     fn list_is_attached_to_root_and_removed() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec("", "v1"))];
-        let resources = parse_specs(specs, "v1.33").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.33").unwrap();
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0].kind, "Pod");
         assert_eq!(resources[0].list_description, "PodList is a list of Pods.");
@@ -173,7 +216,7 @@ mod tests {
                 delete_options_spec("apps", "v1"),
             ),
         ];
-        let resources = parse_specs(specs, "v1.33").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.33").unwrap();
         // DeleteOptions appears in both files under the same schema name;
         // only the first file's GVK entry should be used.
         assert_eq!(resources.len(), 1);
@@ -198,7 +241,7 @@ mod tests {
                 }}
             }),
         )];
-        let resources = parse_specs(specs, "v1.33").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.33").unwrap();
         let kinds: Vec<&str> = resources.iter().map(|r| r.kind.as_str()).collect();
         assert_eq!(kinds, ["Pod", "Service"]);
     }
@@ -240,7 +283,7 @@ mod tests {
     #[test]
     fn spec_fields_are_extracted_from_sub_schema() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec_with_sub_schemas())];
-        let resources = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         assert_eq!(pod.spec_description, "PodSpec is a description of a pod.");
         assert_eq!(pod.spec_fields.len(), 2);
@@ -252,7 +295,7 @@ mod tests {
     #[test]
     fn status_fields_are_extracted_from_sub_schema() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec_with_sub_schemas())];
-        let resources = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         assert_eq!(
             pod.status_description,
@@ -267,7 +310,7 @@ mod tests {
     #[test]
     fn spec_required_is_propagated_from_sub_schema() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec_with_sub_schemas())];
-        let resources = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         let node_name = pod
             .spec_fields
@@ -287,7 +330,7 @@ mod tests {
     fn spec_fields_empty_when_sub_schema_absent() {
         // pod_spec() references PodSpec via $ref but does not include its schema.
         let specs = vec![("api__v1_openapi.json".into(), pod_spec("", "v1"))];
-        let resources = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         assert!(pod.spec_fields.is_empty());
         assert!(pod.spec_description.is_empty());
@@ -313,10 +356,141 @@ mod tests {
                 }
             }),
         )];
-        let resources = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
         let cm = resources.iter().find(|r| r.kind == "ConfigMap").unwrap();
         assert!(cm.spec_fields.is_empty());
         assert!(cm.status_fields.is_empty());
+    }
+
+    fn pod_with_objectmeta_spec() -> serde_json::Value {
+        json!({
+            "components": { "schemas": {
+                "io.k8s.api.core.v1.Pod": {
+                    "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Pod"}],
+                    "properties": {
+                        "metadata": {"$ref": "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"}
+                    }
+                },
+                "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta": {
+                    "description": "ObjectMeta is metadata that all persisted resources must have.",
+                    "properties": {
+                        "name": {"type": "string", "description": "Name must be unique within a namespace."},
+                        "namespace": {"type": "string", "description": "Namespace of the object."}
+                    }
+                }
+            }}
+        })
+    }
+
+    #[test]
+    fn common_def_extracted_when_referenced_by_resource() {
+        let specs = vec![("api__v1_openapi.json".into(), pod_with_objectmeta_spec())];
+        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        assert_eq!(common_defs.len(), 1);
+        assert_eq!(common_defs[0].name, "ObjectMeta");
+        assert_eq!(
+            common_defs[0].description,
+            "ObjectMeta is metadata that all persisted resources must have."
+        );
+        assert_eq!(common_defs[0].fields.len(), 2);
+    }
+
+    #[test]
+    fn common_def_not_returned_when_unreferenced() {
+        let specs = vec![(
+            "api__v1_openapi.json".into(),
+            json!({
+                "components": { "schemas": {
+                    "io.k8s.api.core.v1.Pod": {
+                        "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Pod"}],
+                        "properties": {"apiVersion": {"type": "string"}}
+                    },
+                    "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta": {
+                        "description": "ObjectMeta is metadata.",
+                        "properties": {"name": {"type": "string"}}
+                    }
+                }}
+            }),
+        )];
+        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        assert!(
+            common_defs.is_empty(),
+            "unreferenced common def must not be included"
+        );
+    }
+
+    #[test]
+    fn common_def_deduplicated_across_files() {
+        let spec = pod_with_objectmeta_spec();
+        let specs = vec![
+            ("api__v1_openapi.json".into(), spec.clone()),
+            ("apis__apps__v1_openapi.json".into(), spec),
+        ];
+        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        assert_eq!(
+            common_defs
+                .iter()
+                .filter(|cd| cd.name == "ObjectMeta")
+                .count(),
+            1,
+            "ObjectMeta must appear at most once across all spec files"
+        );
+    }
+
+    #[test]
+    fn common_def_ref_in_array_field_is_detected() {
+        let specs = vec![(
+            "api__v1_openapi.json".into(),
+            json!({
+                "components": { "schemas": {
+                    "io.k8s.api.core.v1.Pod": {
+                        "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Pod"}],
+                        "properties": {
+                            "imagePullSecrets": {
+                                "type": "array",
+                                "items": {"$ref": "#/components/schemas/io.k8s.api.core.v1.LocalObjectReference"}
+                            }
+                        }
+                    },
+                    "io.k8s.api.core.v1.LocalObjectReference": {
+                        "description": "LocalObjectReference contains information to locate the referenced object.",
+                        "properties": {"name": {"type": "string", "description": "Name of the referent."}}
+                    }
+                }}
+            }),
+        )];
+        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        assert_eq!(common_defs.len(), 1);
+        assert_eq!(common_defs[0].name, "LocalObjectReference");
+    }
+
+    #[test]
+    fn common_defs_sorted_by_name() {
+        let specs = vec![(
+            "api__v1_openapi.json".into(),
+            json!({
+                "components": { "schemas": {
+                    "io.k8s.api.core.v1.Pod": {
+                        "x-kubernetes-group-version-kind": [{"group": "", "version": "v1", "kind": "Pod"}],
+                        "properties": {
+                            "selector": {"$ref": "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector"},
+                            "metadata": {"$ref": "#/components/schemas/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"}
+                        }
+                    },
+                    "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta": {
+                        "description": "ObjectMeta.",
+                        "properties": {}
+                    },
+                    "io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector": {
+                        "description": "LabelSelector.",
+                        "properties": {}
+                    }
+                }}
+            }),
+        )];
+        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        let names: Vec<&str> = common_defs.iter().map(|cd| cd.name.as_str()).collect();
+        assert_eq!(names, ["LabelSelector", "ObjectMeta"]);
     }
 }
 
@@ -325,9 +499,15 @@ fn parse_spec_file(
     k8s_version: &str,
     file_group: &str,
     file_version: &str,
-    emitted: &mut HashSet<String>,
-    out: &mut Vec<Resource>,
+    state: &mut ParseState<'_>,
 ) {
+    let ParseState {
+        emitted,
+        emitted_common,
+        referenced_common,
+        resources: out,
+        common_defs,
+    } = state;
     let Some(schemas) = spec.components.and_then(|c| c.schemas) else {
         return;
     };
@@ -389,6 +569,10 @@ fn parse_spec_file(
         let (status_description, status_fields) =
             sub_schema_fields("status", schema, &by_short_name);
 
+        collect_common_def_refs(&fields, referenced_common);
+        collect_common_def_refs(&spec_fields, referenced_common);
+        collect_common_def_refs(&status_fields, referenced_common);
+
         // Mark as emitted only after we've confirmed we'll produce a resource.
         emitted.insert(schema_name.clone());
 
@@ -406,6 +590,70 @@ fn parse_spec_file(
             status_description,
             status_fields,
         });
+    }
+
+    // Second pass: extract common definitions (schemas whose short name is in the
+    // known list). These are shared utility types without GVK entries of their own.
+    for (schema_name, schema) in &schemas {
+        let short = resolve::short_name(schema_name);
+        if !COMMON_DEF_NAMES.contains(&short.as_str()) {
+            continue;
+        }
+        if emitted_common.contains(schema_name.as_str()) {
+            continue;
+        }
+
+        let required_set: HashSet<String> = schema
+            .required
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .collect();
+        let mut fields: Vec<Field> = schema
+            .properties
+            .as_ref()
+            .map(|props| {
+                props
+                    .iter()
+                    .map(|(name, prop)| Field {
+                        name: name.clone(),
+                        description: prop.description.clone().unwrap_or_default(),
+                        required: required_set.contains(name),
+                        field_type: resolve::resolve_field_type(prop),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        fields.sort_by(|a, b| a.name.cmp(&b.name));
+
+        emitted_common.insert(schema_name.clone());
+        common_defs.push(CommonDefinition {
+            name: short,
+            description: schema.description.clone().unwrap_or_default(),
+            fields,
+            k8s_version: k8s_version.to_string(),
+        });
+    }
+}
+
+/// Scans a field list and records any common definition names referenced as field types.
+fn collect_common_def_refs(fields: &[Field], referenced: &mut HashSet<String>) {
+    for f in fields {
+        if let Some(name) = field_ref_name(&f.field_type) {
+            if COMMON_DEF_NAMES.contains(&name.as_str()) {
+                referenced.insert(name);
+            }
+        }
+    }
+}
+
+fn field_ref_name(ft: &crate::model::FieldType) -> Option<String> {
+    use crate::model::FieldType;
+    match ft {
+        FieldType::Ref(name) => Some(name.clone()),
+        FieldType::Array(inner) => field_ref_name(inner),
+        _ => None,
     }
 }
 

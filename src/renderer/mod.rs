@@ -2,7 +2,7 @@ mod copy;
 mod pages;
 mod sitemap;
 
-use crate::model::{FieldType, Resource};
+use crate::model::{CommonDefinition, FieldType, Resource};
 use anyhow::Result;
 use copy::UiCopy;
 use minijinja::Environment;
@@ -13,7 +13,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: bool) -> Result<()> {
+pub fn render(
+    resources: &[Resource],
+    common_defs: &[CommonDefinition],
+    out: &Path,
+    base_url: &str,
+    is_latest: bool,
+) -> Result<()> {
     let mut env = Environment::new();
     env.add_template("base.html", include_str!("../../templates/base.html"))?;
     env.add_template(
@@ -27,6 +33,14 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
     env.add_template(
         "version_index.html",
         include_str!("../../templates/version_index.html"),
+    )?;
+    env.add_template(
+        "common_def.html",
+        include_str!("../../templates/common_def.html"),
+    )?;
+    env.add_template(
+        "common_defs_index.html",
+        include_str!("../../templates/common_defs_index.html"),
     )?;
 
     let nav_prefix_top = if is_latest {
@@ -42,6 +56,28 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
         .iter()
         .map(|r| (r.kind.clone(), resource_path(r, nav_prefix_top)))
         .collect();
+
+    // common_defs is pre-filtered by the parser to only referenced definitions.
+    let common_def_paths: std::collections::HashMap<String, String> = common_defs
+        .iter()
+        .map(|cd| {
+            (
+                cd.name.clone(),
+                format!(
+                    "/docs/{}/common-definitions/{}/",
+                    nav_prefix_top,
+                    cd.name.to_lowercase()
+                ),
+            )
+        })
+        .collect();
+    let mut common_defs_by_version: BTreeMap<String, Vec<&CommonDefinition>> = BTreeMap::new();
+    for cd in common_defs {
+        common_defs_by_version
+            .entry(cd.k8s_version.clone())
+            .or_default()
+            .push(cd);
+    }
 
     // All versions per (group, kind), sorted most-recent first — used for "other versions" links.
     let mut versions_by_kind: std::collections::HashMap<(String, String), Vec<VersionLink>> =
@@ -95,10 +131,19 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
             })
             .collect();
 
+        let mut definition_links: Vec<GroupLink> = Vec::new();
+        if common_defs_by_version.contains_key(k8s_version.as_str()) {
+            definition_links.push(GroupLink {
+                display: copy::BREADCRUMB_COMMON_DEFS.to_string(),
+                href: format!("/docs/{nav_prefix}/common-definitions/"),
+            });
+        }
+
         let version_ctx = VersionIndexCtx {
             k8s_version: k8s_version.clone(),
             k8s_version_display: version_label.clone(),
             groups: group_links,
+            definitions: definition_links,
             canonical_url: format!("{base_url}{version_canonical_path}"),
             canonical_path: version_canonical_path,
             breadcrumbs: vec![
@@ -191,25 +236,11 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                 let canonical_url = format!("{base_url}{canonical_path}");
                 sitemap_urls.push(canonical_url.clone());
 
-                let build_fields = |fields: &[crate::model::Field]| -> Vec<FieldCtx> {
-                    fields
-                        .iter()
-                        .map(|f| {
-                            let type_display = fmt_field_type(&f.field_type);
-                            let type_href = ref_name(&f.field_type)
-                                .and_then(|name| kind_paths.get(&name))
-                                .cloned();
-                            FieldCtx {
-                                name: f.name.clone(),
-                                required: f.required,
-                                type_display,
-                                type_href,
-                                description: f.description.clone(),
-                            }
-                        })
-                        .collect()
-                };
-                let mut fields = order_fields(build_fields(&resource.fields));
+                let mut fields = order_fields(build_fields_ctx(
+                    &resource.fields,
+                    &kind_paths,
+                    &common_def_paths,
+                ));
                 // Link spec/status type labels to their in-page section anchors.
                 for f in &mut fields {
                     if f.name == "spec" && !resource.spec_fields.is_empty() {
@@ -218,9 +249,21 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                         f.type_href = Some(format!("#{kind_lower}status"));
                     }
                 }
-                let list_fields = order_fields(build_fields(&resource.list_fields));
-                let spec_fields = order_fields(build_fields(&resource.spec_fields));
-                let status_fields = order_fields(build_fields(&resource.status_fields));
+                let list_fields = order_fields(build_fields_ctx(
+                    &resource.list_fields,
+                    &kind_paths,
+                    &common_def_paths,
+                ));
+                let spec_fields = order_fields(build_fields_ctx(
+                    &resource.spec_fields,
+                    &kind_paths,
+                    &common_def_paths,
+                ));
+                let status_fields = order_fields(build_fields_ctx(
+                    &resource.status_fields,
+                    &kind_paths,
+                    &common_def_paths,
+                ));
 
                 let meta_description =
                     copy::meta_resource(&resource.kind, k8s_version, &resource.description);
@@ -297,6 +340,107 @@ pub fn render(resources: &[Resource], out: &Path, base_url: &str, is_latest: boo
                     &out.join(format!(
                         "docs/{nav_prefix}/{group}/{}/{kind_lower}/index.html",
                         resource.api_version
+                    )),
+                )?;
+            }
+        }
+
+        // Render common definition pages and index for this k8s version.
+        let version_common_defs = common_defs_by_version
+            .get(k8s_version.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+
+        if !version_common_defs.is_empty() {
+            let idx_canonical_path = "/docs/latest/common-definitions/".to_string();
+            sitemap_urls.push(format!("{base_url}{idx_canonical_path}"));
+
+            let def_links: Vec<CommonDefLink> = version_common_defs
+                .iter()
+                .map(|cd| CommonDefLink {
+                    name: cd.name.clone(),
+                    href: format!(
+                        "/docs/{nav_prefix}/common-definitions/{}/",
+                        cd.name.to_lowercase()
+                    ),
+                })
+                .collect();
+
+            let idx_ctx = CommonDefsIndexCtx {
+                k8s_version: k8s_version.clone(),
+                k8s_version_display: version_label.clone(),
+                definitions: def_links,
+                canonical_url: format!("{base_url}{idx_canonical_path}"),
+                canonical_path: idx_canonical_path,
+                breadcrumbs: vec![
+                    Crumb {
+                        label: copy::BREADCRUMB_HOME.into(),
+                        href: "/".into(),
+                    },
+                    Crumb {
+                        label: version_label.clone(),
+                        href: format!("/docs/{nav_prefix}/"),
+                    },
+                    Crumb {
+                        label: copy::BREADCRUMB_COMMON_DEFS.into(),
+                        href: format!("/docs/{nav_prefix}/common-definitions/"),
+                    },
+                ],
+                meta_description: copy::meta_common_defs_index(k8s_version),
+                page_title: copy::title_common_defs_index(&version_label),
+                copy: UiCopy::new(),
+            };
+            write_html(
+                &env,
+                "common_defs_index.html",
+                &idx_ctx,
+                &out.join(format!("docs/{nav_prefix}/common-definitions/index.html")),
+            )?;
+
+            for cd in version_common_defs {
+                let name_lower = cd.name.to_lowercase();
+                let canonical_path = format!("/docs/latest/common-definitions/{name_lower}/");
+                let canonical_url = format!("{base_url}{canonical_path}");
+                sitemap_urls.push(canonical_url.clone());
+
+                let fields =
+                    order_fields(build_fields_ctx(&cd.fields, &kind_paths, &common_def_paths));
+                let ctx = CommonDefPageCtx {
+                    name: cd.name.clone(),
+                    description: cd.description.clone(),
+                    fields,
+                    k8s_version: k8s_version.clone(),
+                    k8s_version_display: version_label.clone(),
+                    canonical_url,
+                    canonical_path,
+                    breadcrumbs: vec![
+                        Crumb {
+                            label: copy::BREADCRUMB_HOME.into(),
+                            href: "/".into(),
+                        },
+                        Crumb {
+                            label: version_label.clone(),
+                            href: format!("/docs/{nav_prefix}/"),
+                        },
+                        Crumb {
+                            label: copy::BREADCRUMB_COMMON_DEFS.into(),
+                            href: format!("/docs/{nav_prefix}/common-definitions/"),
+                        },
+                        Crumb {
+                            label: cd.name.clone(),
+                            href: format!("/docs/{nav_prefix}/common-definitions/{name_lower}/"),
+                        },
+                    ],
+                    meta_description: copy::meta_common_def(&cd.name, k8s_version, &cd.description),
+                    page_title: copy::title_common_def(&cd.name, &version_label),
+                    copy: UiCopy::new(),
+                };
+                write_html(
+                    &env,
+                    "common_def.html",
+                    &ctx,
+                    &out.join(format!(
+                        "docs/{nav_prefix}/common-definitions/{name_lower}/index.html"
                     )),
                 )?;
             }
@@ -421,6 +565,33 @@ fn ref_name(ft: &FieldType) -> Option<String> {
         FieldType::Array(inner) => ref_name(inner),
         _ => None,
     }
+}
+
+fn build_fields_ctx(
+    fields: &[crate::model::Field],
+    kind_paths: &std::collections::HashMap<String, String>,
+    common_def_paths: &std::collections::HashMap<String, String>,
+) -> Vec<FieldCtx> {
+    fields
+        .iter()
+        .map(|f| {
+            let type_display = fmt_field_type(&f.field_type);
+            let type_href = ref_name(&f.field_type)
+                .and_then(|name| {
+                    common_def_paths
+                        .get(&name)
+                        .or_else(|| kind_paths.get(&name))
+                })
+                .cloned();
+            FieldCtx {
+                name: f.name.clone(),
+                required: f.required,
+                type_display,
+                type_href,
+                description: f.description.clone(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -550,6 +721,15 @@ mod tests {
         );
     }
 
+    fn make_common_def(name: &str) -> crate::model::CommonDefinition {
+        crate::model::CommonDefinition {
+            name: name.into(),
+            description: format!("{name} is a common definition."),
+            fields: vec![],
+            k8s_version: "v1.33".into(),
+        }
+    }
+
     fn make_resource(kind: &str) -> crate::model::Resource {
         crate::model::Resource {
             kind: kind.into(),
@@ -584,6 +764,7 @@ mod tests {
         // First render: two resources
         render(
             &[make_resource("Foo"), make_resource("Bar")],
+            &[],
             dir.path(),
             base,
             true,
@@ -600,7 +781,7 @@ mod tests {
         );
 
         // Second render: Bar removed from the spec
-        render(&[make_resource("Foo")], dir.path(), base, true).unwrap();
+        render(&[make_resource("Foo")], &[], dir.path(), base, true).unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
         assert!(
             sitemap.contains("/docs/latest/core/v1/foo/"),
@@ -617,7 +798,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = "https://example.com";
 
-        render(&[make_resource("Pod")], dir.path(), base, true).unwrap();
+        render(&[make_resource("Pod")], &[], dir.path(), base, true).unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
         assert!(
             sitemap.contains("/docs/latest/"),
@@ -634,6 +815,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -651,6 +833,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -668,6 +851,7 @@ mod tests {
         std::fs::write(dir.path().join("robots.txt"), "old content").unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -686,6 +870,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -708,6 +893,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -738,6 +924,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -760,6 +947,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -796,6 +984,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             false,
@@ -818,6 +1007,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -835,6 +1025,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             false,
@@ -855,6 +1046,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -882,6 +1074,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -902,6 +1095,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -921,6 +1115,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -940,6 +1135,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("Pod")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -965,7 +1161,7 @@ mod tests {
             "apiVersion",
             "APIVersion defines the versioned schema.",
         )];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1002,7 +1198,7 @@ mod tests {
             status_description: String::new(),
             status_fields: vec![],
         };
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/apps/v1/deployment/index.html"))
                 .unwrap();
@@ -1020,7 +1216,7 @@ mod tests {
             "kind",
             "Kind is a string value representing the REST resource.",
         )];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1048,7 +1244,7 @@ mod tests {
                 "Kind is a string value representing the REST resource.",
             ),
         ];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1079,7 +1275,7 @@ mod tests {
             model_field("nodeName", "Name of the node."),
             model_field("restartPolicy", "Restart policy."),
         ];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1110,7 +1306,7 @@ mod tests {
             model_field("hostIP", "IP address of the host."),
             model_field("phase", "Phase of the pod."),
         ];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1137,7 +1333,7 @@ mod tests {
         let mut r = make_resource("Pod");
         r.fields = vec![ref_field("spec", "PodSpec", "Spec of the pod.")];
         r.spec_fields = vec![model_field("nodeName", "Name of the node.")];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1152,7 +1348,7 @@ mod tests {
         let mut r = make_resource("Pod");
         r.fields = vec![ref_field("status", "PodStatus", "Status of the pod.")];
         r.status_fields = vec![model_field("phase", "Phase of the pod.")];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1167,7 +1363,7 @@ mod tests {
         let mut r = make_resource("Pod");
         r.fields = vec![ref_field("spec", "PodSpec", "Spec of the pod.")];
         // spec_fields left empty — no anchor should be generated
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1181,6 +1377,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render(
             &[make_resource("ConfigMap")],
+            &[],
             dir.path(),
             "https://example.com",
             true,
@@ -1204,13 +1401,152 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("ReplicaSet");
         r.spec_fields = vec![model_field("replicas", "Number of replicas.")];
-        render(&[r], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/replicaset/index.html"))
                 .unwrap();
         assert!(
             html.contains(r#"id="replicasetspec""#),
             "spec section id must be lowercase kind + spec"
+        );
+    }
+
+    #[test]
+    fn common_def_index_page_is_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("ObjectMeta")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        assert!(
+            dir.path()
+                .join("docs/v1.33/common-definitions/index.html")
+                .exists(),
+            "common definitions index must be generated"
+        );
+    }
+
+    #[test]
+    fn common_def_page_is_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("ObjectMeta")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        assert!(
+            dir.path()
+                .join("docs/v1.33/common-definitions/objectmeta/index.html")
+                .exists(),
+            "ObjectMeta page must be generated at lowercased path"
+        );
+    }
+
+    #[test]
+    fn common_def_pages_absent_when_no_common_defs() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        assert!(
+            !dir.path().join("docs/v1.33/common-definitions").exists(),
+            "common-definitions directory must not be created when there are no common defs"
+        );
+    }
+
+    #[test]
+    fn resource_field_ref_to_common_def_gets_href() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![crate::model::Field {
+            name: "metadata".into(),
+            description: "Standard object metadata.".into(),
+            required: false,
+            field_type: crate::model::FieldType::Ref("ObjectMeta".into()),
+        }];
+        render(
+            &[r],
+            &[make_common_def("ObjectMeta")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("/common-definitions/objectmeta/"),
+            "metadata field must link to the ObjectMeta common definition page"
+        );
+    }
+
+    #[test]
+    fn version_index_links_to_common_definitions_when_defs_present() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("ObjectMeta")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(dir.path().join("docs/v1.33/index.html")).unwrap();
+        assert!(
+            html.contains("common-definitions"),
+            "version index must contain a link to common-definitions"
+        );
+    }
+
+    #[test]
+    fn version_index_no_common_definitions_link_when_no_defs() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(dir.path().join("docs/v1.33/index.html")).unwrap();
+        assert!(
+            !html.contains("common-definitions"),
+            "version index must not mention common-definitions when none are present"
+        );
+    }
+
+    #[test]
+    fn common_def_urls_in_sitemap_when_is_latest() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("ObjectMeta")],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
+        assert!(
+            sitemap.contains("/docs/latest/common-definitions/objectmeta/"),
+            "sitemap must include individual common def URL"
+        );
+        assert!(
+            sitemap.contains("/docs/latest/common-definitions/"),
+            "sitemap must include common definitions index URL"
         );
     }
 }
