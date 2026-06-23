@@ -10,6 +10,8 @@ use std::collections::HashSet;
 /// Common Kubernetes type definitions shared across many resources, as listed on
 /// https://web.archive.org/web/20240227200353/https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/
 const COMMON_DEF_NAMES: &[&str] = &[
+    "BoundObjectReference",
+    "CrossVersionObjectReference",
     "DeleteOptions",
     "LabelSelector",
     "ListMeta",
@@ -23,6 +25,7 @@ const COMMON_DEF_NAMES: &[&str] = &[
     "ResourceFieldSelector",
     "Status",
     "TypedLocalObjectReference",
+    "TypedObjectReference",
 ];
 
 struct ParseState<'a> {
@@ -599,7 +602,7 @@ fn parse_spec_file(
         if !COMMON_DEF_NAMES.contains(&short.as_str()) {
             continue;
         }
-        if emitted_common.contains(schema_name.as_str()) {
+        if emitted_common.contains(short.as_str()) {
             continue;
         }
 
@@ -627,7 +630,7 @@ fn parse_spec_file(
             .unwrap_or_default();
         fields.sort_by(|a, b| a.name.cmp(&b.name));
 
-        emitted_common.insert(schema_name.clone());
+        emitted_common.insert(short.clone());
         common_defs.push(CommonDefinition {
             name: short,
             description: schema.description.clone().unwrap_or_default(),
