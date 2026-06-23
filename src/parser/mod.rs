@@ -10,6 +10,8 @@ use std::collections::HashSet;
 /// Common Kubernetes type definitions shared across many resources, as listed on
 /// https://web.archive.org/web/20240227200353/https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/
 const COMMON_DEF_NAMES: &[&str] = &[
+    "BoundObjectReference",
+    "CrossVersionObjectReference",
     "DeleteOptions",
     "LabelSelector",
     "ListMeta",
@@ -23,6 +25,7 @@ const COMMON_DEF_NAMES: &[&str] = &[
     "ResourceFieldSelector",
     "Status",
     "TypedLocalObjectReference",
+    "TypedObjectReference",
 ];
 
 struct ParseState<'a> {
