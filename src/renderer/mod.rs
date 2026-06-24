@@ -4,6 +4,7 @@ mod sitemap;
 
 use crate::model::{CommonDefinition, FieldType, Resource};
 use anyhow::Result;
+use pulldown_cmark::{html as cm_html, Options, Parser};
 use copy::UiCopy;
 use minijinja::Environment;
 use pages::*;
@@ -297,13 +298,13 @@ pub fn render(
                     api_version: resource.api_version.clone(),
                     k8s_version: k8s_version.clone(),
                     k8s_version_display: version_label.clone(),
-                    description: resource.description.clone(),
+                    description: md_to_html(&resource.description),
                     fields,
-                    list_description: resource.list_description.clone(),
+                    list_description: md_to_html(&resource.list_description),
                     list_fields,
-                    spec_description: resource.spec_description.clone(),
+                    spec_description: md_to_html(&resource.spec_description),
                     spec_fields,
-                    status_description: resource.status_description.clone(),
+                    status_description: md_to_html(&resource.status_description),
                     status_fields,
                     other_versions,
                     canonical_url,
@@ -410,7 +411,7 @@ pub fn render(
                     order_fields(build_fields_ctx(&cd.fields, &kind_paths, &common_def_paths));
                 let ctx = CommonDefPageCtx {
                     name: cd.name.clone(),
-                    description: cd.description.clone(),
+                    description: md_to_html(&cd.description),
                     fields,
                     k8s_version: k8s_version.clone(),
                     k8s_version_display: version_label.clone(),
@@ -570,6 +571,16 @@ fn ref_name(ft: &FieldType) -> Option<String> {
     }
 }
 
+fn md_to_html(md: &str) -> String {
+    if md.is_empty() {
+        return String::new();
+    }
+    let parser = Parser::new_ext(md, Options::empty());
+    let mut out = String::new();
+    cm_html::push_html(&mut out, parser);
+    out
+}
+
 fn build_fields_ctx(
     fields: &[crate::model::Field],
     kind_paths: &std::collections::HashMap<String, String>,
@@ -591,7 +602,7 @@ fn build_fields_ctx(
                 required: f.required,
                 type_display,
                 type_href,
-                description: f.description.clone(),
+                description: md_to_html(&f.description),
             }
         })
         .collect()

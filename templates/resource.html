@@ -16,7 +16,7 @@
   <dt>kind: <code>{{ kind_value }}</code></dt>
   {% else %}
   <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %})</span></dt>
-  <dd>{{ field.description if field.description else copy.msg_no_description }}</dd>
+  <dd>{{ field.description | safe if field.description else copy.msg_no_description }}</dd>
   {% endif %}
   {% endfor %}
 </dl>
@@ -31,7 +31,7 @@
   </p>
   {% endif %}
   {% if description %}
-  <p>{{ description }}</p>
+  {{ description | safe }}
   {% endif %}
   <section aria-labelledby="fields-heading">
     <h2 id="fields-heading">{{ copy.heading_fields }}</h2>
@@ -45,7 +45,7 @@
   <section aria-labelledby="{{ kind_lower }}spec">
     <h2 id="{{ kind_lower }}spec">{{ kind }}Spec</h2>
     {% if spec_description %}
-    <p>{{ spec_description }}</p>
+    {{ spec_description | safe }}
     {% endif %}
     {{ field_dl(spec_fields, copy) }}
   </section>
@@ -54,7 +54,7 @@
   <section aria-labelledby="{{ kind_lower }}status">
     <h2 id="{{ kind_lower }}status">{{ kind }}Status</h2>
     {% if status_description %}
-    <p>{{ status_description }}</p>
+    {{ status_description | safe }}
     {% endif %}
     {{ field_dl(status_fields, copy) }}
   </section>
@@ -63,7 +63,7 @@
   <section aria-labelledby="list-heading">
     <h2 id="list-heading">{{ kind }}{{ copy.list_suffix }}</h2>
     {% if list_description %}
-    <p>{{ list_description }}</p>
+    {{ list_description | safe }}
     {% endif %}
     {{ field_dl(list_fields, copy, group_display, api_version, kind_value=kind ~ "List") }}
   </section>
