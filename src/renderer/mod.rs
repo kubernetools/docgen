@@ -20,6 +20,9 @@ pub fn render(
     base_url: &str,
     is_latest: bool,
 ) -> Result<()> {
+    fs::create_dir_all(out.join("docs"))?;
+    fs::write(out.join("docs/style.css"), include_str!("../../templates/style.css"))?;
+
     let mut env = Environment::new();
     env.add_template("base.html", include_str!("../../templates/base.html"))?;
     env.add_template(

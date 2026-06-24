@@ -6,61 +6,8 @@
   <title>{% block title %}{{ copy.site_name }} | {{ copy.site_tagline }}{% endblock %}</title>
   <meta name="description" content="{% block meta_description %}{{ copy.default_meta_description }}{% endblock %}">
   <link rel="canonical" href="{{ canonical_path | safe }}">
+  <link rel="stylesheet" href="/docs/style.css">
   <script type="application/ld+json">{% block jsonld %}{}{% endblock %}</script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      line-height: 1.6;
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 1rem 1.5rem;
-      color: #111;
-      background: #fff;
-    }
-    a { color: #0066cc; }
-    a:hover { color: #004499; }
-    nav[aria-label="Breadcrumb"] ol {
-      display: flex;
-      flex-wrap: wrap;
-      list-style: none;
-      padding: 0;
-      margin: 0 0 1.5rem;
-      gap: 0.25rem 0.5rem;
-      font-size: 0.9em;
-    }
-    nav[aria-label="Breadcrumb"] li + li::before {
-      content: "/";
-      color: #777;
-      margin-right: 0.5rem;
-    }
-    .badge {
-      display: inline-block;
-      font-size: 0.75em;
-      background: #f0f0f0;
-      color: #444;
-      padding: 0.1em 0.5em;
-      border-radius: 3px;
-      font-family: monospace;
-      vertical-align: middle;
-    }
-    .type { font-family: monospace; font-size: 0.85em; color: #555; }
-    dt.req::before { content: "* "; }
-    dl { margin: 0; }
-    dt { font-family: monospace; font-weight: 600; margin-top: 1rem; }
-    dt code { font-weight: normal; }
-    dl > dt:first-child { margin-top: 0; }
-    dd { margin: 0.2rem 0 0; color: #333; }
-    footer {
-      margin-top: 3rem;
-      padding-top: 1rem;
-      border-top: 1px solid #eee;
-      font-size: 0.85em;
-      color: #777;
-    }
-    nav ul { list-style: none; padding: 0; }
-    nav ul li { margin: 0.4rem 0; }
-  </style>
 </head>
 <body>
   <header>
