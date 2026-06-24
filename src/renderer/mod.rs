@@ -634,8 +634,7 @@ fn linkify_html(html: String) -> String {
                 let raw_end = rest
                     .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
                     .unwrap_or(rest.len());
-                let url = rest[..raw_end]
-                    .trim_end_matches(['.', ',', ';', ':', ')']);
+                let url = rest[..raw_end].trim_end_matches(['.', ',', ';', ':', ')']);
                 out.push_str(&format!(
                     r#"<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>"#
                 ));
