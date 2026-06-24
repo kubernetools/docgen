@@ -15,9 +15,7 @@
     {% if fields %}
     <dl>
       {% for field in fields %}
-      <dt{% if field.required %} class="req"{% endif %}>
-        {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
-      </dt>
+      <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %})</span></dt>
       <dd>{{ field.description if field.description else copy.msg_no_description }}</dd>
       {% endfor %}
     </dl>

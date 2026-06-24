@@ -11,15 +11,11 @@
 <dl>
   {% for field in fields %}
   {% if kind_value is not none and field.name == "apiVersion" %}
-  <dt>apiVersion</dt>
-  <dd><code>{% if group_display == "core" %}{{ api_version }}{% else %}{{ group_display }}/{{ api_version }}{% endif %}</code></dd>
+  <dt>apiVersion: <code>{% if group_display == "core" %}{{ api_version }}{% else %}{{ group_display }}/{{ api_version }}{% endif %}</code></dt>
   {% elif kind_value is not none and field.name == "kind" %}
-  <dt>kind</dt>
-  <dd><code>{{ kind_value }}</code></dd>
+  <dt>kind: <code>{{ kind_value }}</code></dt>
   {% else %}
-  <dt{% if field.required %} class="req"{% endif %}>
-    {{ field.name }}<span class="type">{% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}</span>
-  </dt>
+  <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %})</span></dt>
   <dd>{{ field.description if field.description else copy.msg_no_description }}</dd>
   {% endif %}
   {% endfor %}
