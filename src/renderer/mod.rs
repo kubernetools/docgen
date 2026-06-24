@@ -1629,6 +1629,61 @@ mod tests {
     }
 
     #[test]
+    fn render_writes_style_css() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        assert!(
+            dir.path().join("docs/style.css").exists(),
+            "render must write docs/style.css"
+        );
+        let css = std::fs::read_to_string(dir.path().join("docs/style.css")).unwrap();
+        assert!(!css.is_empty(), "docs/style.css must not be empty");
+    }
+
+    #[test]
+    fn resource_description_is_rendered_as_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.description = "A **bold** description with `code`.".into();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("<strong>bold</strong>"),
+            "resource description must render markdown bold"
+        );
+        assert!(
+            html.contains("<code>code</code>"),
+            "resource description must render markdown inline code"
+        );
+    }
+
+    #[test]
+    fn field_description_is_rendered_as_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![model_field("name", "A **required** field with `type`.")];
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("<strong>required</strong>"),
+            "field description must render markdown bold"
+        );
+        assert!(
+            html.contains("<code>type</code>"),
+            "field description must render markdown inline code"
+        );
+    }
+
+    #[test]
     fn bare_urls_are_linkified() {
         let html =
             md_to_html("More info: https://kubernetes.io/docs/concepts/ and http://example.com.");
@@ -1636,6 +1691,40 @@ mod tests {
         assert!(html.contains(r#"<a href="http://example.com" target="_blank" rel="noopener noreferrer">http://example.com</a>"#));
         // trailing period must not be part of the URL
         assert!(!html.contains("http://example.com.\""));
+    }
+
+    #[test]
+    fn bare_url_at_end_of_string_is_linkified() {
+        let html = md_to_html("See https://kubernetes.io/docs/");
+        assert!(
+            html.contains(
+                r#"<a href="https://kubernetes.io/docs/" target="_blank" rel="noopener noreferrer">https://kubernetes.io/docs/</a>"#
+            ),
+            "URL at end of string with no trailing text must be linkified"
+        );
+    }
+
+    #[test]
+    fn description_without_urls_is_unchanged() {
+        let html = md_to_html("A plain description with no links.");
+        assert!(
+            !html.contains("<a "),
+            "description without URLs must not contain any anchor tags"
+        );
+        assert!(
+            html.contains("A plain description with no links."),
+            "description text must be preserved"
+        );
+    }
+
+    #[test]
+    fn url_in_href_attribute_is_not_double_wrapped() {
+        let html = md_to_html("See [kubernetes.io](https://kubernetes.io/).");
+        let count = html.matches(r#"href="https://kubernetes.io/""#).count();
+        assert_eq!(
+            count, 1,
+            "href URL must appear exactly once, not be double-wrapped"
+        );
     }
 
     #[test]
