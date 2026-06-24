@@ -578,7 +578,91 @@ fn md_to_html(md: &str) -> String {
     let parser = Parser::new_ext(md, Options::empty());
     let mut out = String::new();
     cm_html::push_html(&mut out, parser);
+    linkify_html(out)
+}
+
+/// Annotates HTTP(S) links with external-link attributes and wraps bare URLs in `<a>` tags.
+///
+/// Pulldown-cmark does not auto-link bare URLs; they end up as plain text. This function
+/// handles both the markdown-generated anchors (adding attributes) and bare URL text nodes
+/// (wrapping them). Text inside existing `<a>` elements is skipped to avoid nesting.
+fn linkify_html(html: String) -> String {
+    // Annotate <a href="http…"> already generated from markdown link syntax.
+    let html = html.replace(
+        r#"<a href="http"#,
+        r#"<a target="_blank" rel="noopener noreferrer" href="http"#,
+    );
+
+    let mut out = String::with_capacity(html.len() + 256);
+    let mut rest: &str = &html;
+
+    while !rest.is_empty() {
+        let tag_pos = rest.find('<');
+        let url_pos = find_bare_url_pos(rest);
+
+        match (tag_pos, url_pos) {
+            (None, None) => {
+                out.push_str(rest);
+                break;
+            }
+            // Tag comes before (or at the same position as) any bare URL.
+            (Some(t), url) if url.map_or(true, |u| t <= u) => {
+                out.push_str(&rest[..t]);
+                rest = &rest[t..];
+                let tag_end = rest.find('>').map(|p| p + 1).unwrap_or(rest.len());
+                let tag = &rest[..tag_end];
+                out.push_str(tag);
+                rest = &rest[tag_end..];
+                // Skip inner text of <a> tags verbatim to avoid double-wrapping.
+                if tag.starts_with("<a ") || tag == "<a>" {
+                    if let Some(close) = rest.find("</a>") {
+                        out.push_str(&rest[..close + 4]);
+                        rest = &rest[close + 4..];
+                    } else {
+                        out.push_str(rest);
+                        break;
+                    }
+                }
+            }
+            // Bare URL comes before the next tag.
+            (_, Some(u)) => {
+                out.push_str(&rest[..u]);
+                rest = &rest[u..];
+                let raw_end = rest
+                    .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+                    .unwrap_or(rest.len());
+                let url = rest[..raw_end]
+                    .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')'));
+                out.push_str(&format!(
+                    r#"<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>"#
+                ));
+                rest = &rest[url.len()..];
+            }
+            _ => unreachable!(),
+        }
+    }
+
     out
+}
+
+/// Returns the byte offset of the first bare `http://` or `https://` that is not already
+/// the value of an `href` attribute (i.e. not preceded by `href="`).
+fn find_bare_url_pos(s: &str) -> Option<usize> {
+    let mut from = 0;
+    loop {
+        let a = s[from..].find("https://").map(|p| p + from);
+        let b = s[from..].find("http://").map(|p| p + from);
+        let pos = match (a, b) {
+            (None, None) => return None,
+            (Some(x), None) | (None, Some(x)) => x,
+            (Some(x), Some(y)) => x.min(y),
+        };
+        if pos >= 6 && (s[pos - 6..pos] == *r#"href=""# || s[pos - 6..pos] == *"href='") {
+            from = pos + 7;
+            continue;
+        }
+        return Some(pos);
+    }
 }
 
 fn build_fields_ctx(
@@ -1540,6 +1624,23 @@ mod tests {
             !html.contains("common-definitions"),
             "version index must not mention common-definitions when none are present"
         );
+    }
+
+    #[test]
+    fn bare_urls_are_linkified() {
+        let html = md_to_html("More info: https://kubernetes.io/docs/concepts/ and http://example.com.");
+        assert!(html.contains(r#"<a href="https://kubernetes.io/docs/concepts/" target="_blank" rel="noopener noreferrer">https://kubernetes.io/docs/concepts/</a>"#));
+        assert!(html.contains(r#"<a href="http://example.com" target="_blank" rel="noopener noreferrer">http://example.com</a>"#));
+        // trailing period must not be part of the URL
+        assert!(!html.contains("http://example.com.\""));
+    }
+
+    #[test]
+    fn markdown_links_get_external_attributes() {
+        let html = md_to_html("See [the docs](https://kubernetes.io/docs/).");
+        assert!(html.contains(r#"target="_blank" rel="noopener noreferrer" href="https://kubernetes.io/docs/""#));
+        // text inside <a> must not be re-wrapped
+        assert!(!html.contains("<a href=\"the docs\""));
     }
 
     #[test]
