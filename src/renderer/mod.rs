@@ -609,7 +609,7 @@ fn linkify_html(html: String) -> String {
                 break;
             }
             // Tag comes before (or at the same position as) any bare URL.
-            (Some(t), url) if url.map_or(true, |u| t <= u) => {
+            (Some(t), url) if url.is_none_or(|u| t <= u) => {
                 out.push_str(&rest[..t]);
                 rest = &rest[t..];
                 let tag_end = rest.find('>').map(|p| p + 1).unwrap_or(rest.len());
@@ -635,7 +635,7 @@ fn linkify_html(html: String) -> String {
                     .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
                     .unwrap_or(rest.len());
                 let url = rest[..raw_end]
-                    .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')'));
+                    .trim_end_matches(['.', ',', ';', ':', ')']);
                 out.push_str(&format!(
                     r#"<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>"#
                 ));
