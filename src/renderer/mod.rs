@@ -7,6 +7,7 @@ use anyhow::Result;
 use copy::UiCopy;
 use minijinja::Environment;
 use pages::*;
+use pulldown_cmark::{html as cm_html, Options, Parser};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -20,6 +21,12 @@ pub fn render(
     base_url: &str,
     is_latest: bool,
 ) -> Result<()> {
+    fs::create_dir_all(out.join("docs"))?;
+    fs::write(
+        out.join("docs/style.css"),
+        include_str!("../../templates/style.css"),
+    )?;
+
     let mut env = Environment::new();
     env.add_template("base.html", include_str!("../../templates/base.html"))?;
     env.add_template(
@@ -294,13 +301,13 @@ pub fn render(
                     api_version: resource.api_version.clone(),
                     k8s_version: k8s_version.clone(),
                     k8s_version_display: version_label.clone(),
-                    description: resource.description.clone(),
+                    description: md_to_html(&resource.description),
                     fields,
-                    list_description: resource.list_description.clone(),
+                    list_description: md_to_html(&resource.list_description),
                     list_fields,
-                    spec_description: resource.spec_description.clone(),
+                    spec_description: md_to_html(&resource.spec_description),
                     spec_fields,
-                    status_description: resource.status_description.clone(),
+                    status_description: md_to_html(&resource.status_description),
                     status_fields,
                     other_versions,
                     canonical_url,
@@ -407,7 +414,7 @@ pub fn render(
                     order_fields(build_fields_ctx(&cd.fields, &kind_paths, &common_def_paths));
                 let ctx = CommonDefPageCtx {
                     name: cd.name.clone(),
-                    description: cd.description.clone(),
+                    description: md_to_html(&cd.description),
                     fields,
                     k8s_version: k8s_version.clone(),
                     k8s_version_display: version_label.clone(),
@@ -567,6 +574,99 @@ fn ref_name(ft: &FieldType) -> Option<String> {
     }
 }
 
+fn md_to_html(md: &str) -> String {
+    if md.is_empty() {
+        return String::new();
+    }
+    let parser = Parser::new_ext(md, Options::empty());
+    let mut out = String::new();
+    cm_html::push_html(&mut out, parser);
+    linkify_html(out)
+}
+
+/// Annotates HTTP(S) links with external-link attributes and wraps bare URLs in `<a>` tags.
+///
+/// Pulldown-cmark does not auto-link bare URLs; they end up as plain text. This function
+/// handles both the markdown-generated anchors (adding attributes) and bare URL text nodes
+/// (wrapping them). Text inside existing `<a>` elements is skipped to avoid nesting.
+fn linkify_html(html: String) -> String {
+    // Annotate <a href="http…"> already generated from markdown link syntax.
+    let html = html.replace(
+        r#"<a href="http"#,
+        r#"<a target="_blank" rel="noopener noreferrer" href="http"#,
+    );
+
+    let mut out = String::with_capacity(html.len() + 256);
+    let mut rest: &str = &html;
+
+    while !rest.is_empty() {
+        let tag_pos = rest.find('<');
+        let url_pos = find_bare_url_pos(rest);
+
+        match (tag_pos, url_pos) {
+            (None, None) => {
+                out.push_str(rest);
+                break;
+            }
+            // Tag comes before (or at the same position as) any bare URL.
+            (Some(t), url) if url.is_none_or(|u| t <= u) => {
+                out.push_str(&rest[..t]);
+                rest = &rest[t..];
+                let tag_end = rest.find('>').map(|p| p + 1).unwrap_or(rest.len());
+                let tag = &rest[..tag_end];
+                out.push_str(tag);
+                rest = &rest[tag_end..];
+                // Skip inner text of <a> tags verbatim to avoid double-wrapping.
+                if tag.starts_with("<a ") || tag == "<a>" {
+                    if let Some(close) = rest.find("</a>") {
+                        out.push_str(&rest[..close + 4]);
+                        rest = &rest[close + 4..];
+                    } else {
+                        out.push_str(rest);
+                        break;
+                    }
+                }
+            }
+            // Bare URL comes before the next tag.
+            (_, Some(u)) => {
+                out.push_str(&rest[..u]);
+                rest = &rest[u..];
+                let raw_end = rest
+                    .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+                    .unwrap_or(rest.len());
+                let url = rest[..raw_end].trim_end_matches(['.', ',', ';', ':', ')']);
+                out.push_str(&format!(
+                    r#"<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>"#
+                ));
+                rest = &rest[url.len()..];
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    out
+}
+
+/// Returns the byte offset of the first bare `http://` or `https://` that is not already
+/// the value of an `href` attribute (i.e. not preceded by `href="`).
+fn find_bare_url_pos(s: &str) -> Option<usize> {
+    let mut from = 0;
+    loop {
+        let a = s[from..].find("https://").map(|p| p + from);
+        let b = s[from..].find("http://").map(|p| p + from);
+        let pos = match (a, b) {
+            (None, None) => return None,
+            (Some(x), None) | (None, Some(x)) => x,
+            (Some(x), Some(y)) => x.min(y),
+        };
+        if pos >= 6 && (s[pos - 6..pos] == *r#"href=""# || s[pos - 6..pos] == *"href='") {
+            from = pos + 7;
+            continue;
+        }
+        return Some(pos);
+    }
+}
+
 fn build_fields_ctx(
     fields: &[crate::model::Field],
     kind_paths: &std::collections::HashMap<String, String>,
@@ -588,7 +688,7 @@ fn build_fields_ctx(
                 required: f.required,
                 type_display,
                 type_href,
-                description: f.description.clone(),
+                description: md_to_html(&f.description),
             }
         })
         .collect()
@@ -1526,6 +1626,115 @@ mod tests {
             !html.contains("common-definitions"),
             "version index must not mention common-definitions when none are present"
         );
+    }
+
+    #[test]
+    fn render_writes_style_css() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+        )
+        .unwrap();
+        assert!(
+            dir.path().join("docs/style.css").exists(),
+            "render must write docs/style.css"
+        );
+        let css = std::fs::read_to_string(dir.path().join("docs/style.css")).unwrap();
+        assert!(!css.is_empty(), "docs/style.css must not be empty");
+    }
+
+    #[test]
+    fn resource_description_is_rendered_as_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.description = "A **bold** description with `code`.".into();
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("<strong>bold</strong>"),
+            "resource description must render markdown bold"
+        );
+        assert!(
+            html.contains("<code>code</code>"),
+            "resource description must render markdown inline code"
+        );
+    }
+
+    #[test]
+    fn field_description_is_rendered_as_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![model_field("name", "A **required** field with `type`.")];
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("<strong>required</strong>"),
+            "field description must render markdown bold"
+        );
+        assert!(
+            html.contains("<code>type</code>"),
+            "field description must render markdown inline code"
+        );
+    }
+
+    #[test]
+    fn bare_urls_are_linkified() {
+        let html =
+            md_to_html("More info: https://kubernetes.io/docs/concepts/ and http://example.com.");
+        assert!(html.contains(r#"<a href="https://kubernetes.io/docs/concepts/" target="_blank" rel="noopener noreferrer">https://kubernetes.io/docs/concepts/</a>"#));
+        assert!(html.contains(r#"<a href="http://example.com" target="_blank" rel="noopener noreferrer">http://example.com</a>"#));
+        // trailing period must not be part of the URL
+        assert!(!html.contains("http://example.com.\""));
+    }
+
+    #[test]
+    fn bare_url_at_end_of_string_is_linkified() {
+        let html = md_to_html("See https://kubernetes.io/docs/");
+        assert!(
+            html.contains(
+                r#"<a href="https://kubernetes.io/docs/" target="_blank" rel="noopener noreferrer">https://kubernetes.io/docs/</a>"#
+            ),
+            "URL at end of string with no trailing text must be linkified"
+        );
+    }
+
+    #[test]
+    fn description_without_urls_is_unchanged() {
+        let html = md_to_html("A plain description with no links.");
+        assert!(
+            !html.contains("<a "),
+            "description without URLs must not contain any anchor tags"
+        );
+        assert!(
+            html.contains("A plain description with no links."),
+            "description text must be preserved"
+        );
+    }
+
+    #[test]
+    fn url_in_href_attribute_is_not_double_wrapped() {
+        let html = md_to_html("See [kubernetes.io](https://kubernetes.io/).");
+        let count = html.matches(r#"href="https://kubernetes.io/""#).count();
+        assert_eq!(
+            count, 1,
+            "href URL must appear exactly once, not be double-wrapped"
+        );
+    }
+
+    #[test]
+    fn markdown_links_get_external_attributes() {
+        let html = md_to_html("See [the docs](https://kubernetes.io/docs/).");
+        assert!(html.contains(
+            r#"target="_blank" rel="noopener noreferrer" href="https://kubernetes.io/docs/""#
+        ));
+        // text inside <a> must not be re-wrapped
+        assert!(!html.contains("<a href=\"the docs\""));
     }
 
     #[test]
