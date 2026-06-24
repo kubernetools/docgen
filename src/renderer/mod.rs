@@ -4,10 +4,10 @@ mod sitemap;
 
 use crate::model::{CommonDefinition, FieldType, Resource};
 use anyhow::Result;
-use pulldown_cmark::{html as cm_html, Options, Parser};
 use copy::UiCopy;
 use minijinja::Environment;
 use pages::*;
+use pulldown_cmark::{html as cm_html, Options, Parser};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -22,7 +22,10 @@ pub fn render(
     is_latest: bool,
 ) -> Result<()> {
     fs::create_dir_all(out.join("docs"))?;
-    fs::write(out.join("docs/style.css"), include_str!("../../templates/style.css"))?;
+    fs::write(
+        out.join("docs/style.css"),
+        include_str!("../../templates/style.css"),
+    )?;
 
     let mut env = Environment::new();
     env.add_template("base.html", include_str!("../../templates/base.html"))?;
@@ -1628,7 +1631,8 @@ mod tests {
 
     #[test]
     fn bare_urls_are_linkified() {
-        let html = md_to_html("More info: https://kubernetes.io/docs/concepts/ and http://example.com.");
+        let html =
+            md_to_html("More info: https://kubernetes.io/docs/concepts/ and http://example.com.");
         assert!(html.contains(r#"<a href="https://kubernetes.io/docs/concepts/" target="_blank" rel="noopener noreferrer">https://kubernetes.io/docs/concepts/</a>"#));
         assert!(html.contains(r#"<a href="http://example.com" target="_blank" rel="noopener noreferrer">http://example.com</a>"#));
         // trailing period must not be part of the URL
@@ -1638,7 +1642,9 @@ mod tests {
     #[test]
     fn markdown_links_get_external_attributes() {
         let html = md_to_html("See [the docs](https://kubernetes.io/docs/).");
-        assert!(html.contains(r#"target="_blank" rel="noopener noreferrer" href="https://kubernetes.io/docs/""#));
+        assert!(html.contains(
+            r#"target="_blank" rel="noopener noreferrer" href="https://kubernetes.io/docs/""#
+        ));
         // text inside <a> must not be re-wrapped
         assert!(!html.contains("<a href=\"the docs\""));
     }
