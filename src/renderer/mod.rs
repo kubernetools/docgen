@@ -364,21 +364,12 @@ pub fn render(
             let idx_canonical_path = "/docs/latest/common-definitions/".to_string();
             sitemap_urls.push(format!("{base_url}{idx_canonical_path}"));
 
-            let def_links: Vec<CommonDefLink> = version_common_defs
-                .iter()
-                .map(|cd| CommonDefLink {
-                    name: cd.name.clone(),
-                    href: format!(
-                        "/docs/{nav_prefix}/common-definitions/{}/",
-                        cd.name.to_lowercase()
-                    ),
-                })
-                .collect();
+            let categories = group_common_defs_by_category(version_common_defs, nav_prefix);
 
             let idx_ctx = CommonDefsIndexCtx {
                 k8s_version: k8s_version.clone(),
                 k8s_version_display: version_label.clone(),
-                definitions: def_links,
+                categories,
                 canonical_url: format!("{base_url}{idx_canonical_path}"),
                 canonical_path: idx_canonical_path,
                 breadcrumbs: vec![
@@ -539,6 +530,64 @@ fn version_rank(v: &str) -> (u32, u32, u32) {
     } else {
         (s.parse().unwrap_or(0), 2, 0)
     }
+}
+
+fn common_def_category(name: &str) -> &'static str {
+    match name {
+        "ObjectMeta" | "ListMeta" => copy::CATEGORY_METADATA,
+        "ObjectReference" | "LocalObjectReference" | "TypedLocalObjectReference"
+        | "TypedObjectReference" | "CrossVersionObjectReference" | "BoundObjectReference" => {
+            copy::CATEGORY_REFERENCES
+        }
+        "LabelSelector" | "NodeSelector" | "NodeSelectorRequirement" | "ObjectFieldSelector"
+        | "ResourceFieldSelector" => copy::CATEGORY_SELECTORS,
+        "ResourceRequirements" | "Toleration" | "ContainerRestartRule" | "FileKeySelector"
+        | "PodCertificateProjection" | "PodSchedulingGroup" => copy::CATEGORY_WORKLOAD,
+        "Condition" | "Status" | "DeleteOptions" | "Patch" => copy::CATEGORY_STATUS_OPS,
+        "Quantity" | "IntOrString" => copy::CATEGORY_TYPES,
+        _ => copy::CATEGORY_OTHER,
+    }
+}
+
+fn group_common_defs_by_category(
+    defs: &[&CommonDefinition],
+    nav_prefix: &str,
+) -> Vec<CommonDefCategory> {
+    const ORDER: &[&str] = &[
+        copy::CATEGORY_METADATA,
+        copy::CATEGORY_REFERENCES,
+        copy::CATEGORY_SELECTORS,
+        copy::CATEGORY_WORKLOAD,
+        copy::CATEGORY_STATUS_OPS,
+        copy::CATEGORY_TYPES,
+        copy::CATEGORY_OTHER,
+    ];
+
+    let mut buckets: std::collections::HashMap<&str, Vec<CommonDefLink>> =
+        std::collections::HashMap::new();
+    for cd in defs {
+        let link = CommonDefLink {
+            name: cd.name.clone(),
+            href: format!(
+                "/docs/{nav_prefix}/common-definitions/{}/",
+                cd.name.to_lowercase()
+            ),
+        };
+        buckets
+            .entry(common_def_category(&cd.name))
+            .or_default()
+            .push(link);
+    }
+
+    ORDER
+        .iter()
+        .filter_map(|&cat| {
+            buckets.remove(cat).map(|definitions| CommonDefCategory {
+                label: cat.to_string(),
+                definitions,
+            })
+        })
+        .collect()
 }
 
 fn group_seg(group: &str) -> String {

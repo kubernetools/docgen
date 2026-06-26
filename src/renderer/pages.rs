@@ -23,10 +23,16 @@ pub struct CommonDefPageCtx {
 }
 
 #[derive(Serialize)]
+pub struct CommonDefCategory {
+    pub label: String,
+    pub definitions: Vec<CommonDefLink>,
+}
+
+#[derive(Serialize)]
 pub struct CommonDefsIndexCtx {
     pub k8s_version: String,
     pub k8s_version_display: String,
-    pub definitions: Vec<CommonDefLink>,
+    pub categories: Vec<CommonDefCategory>,
     pub canonical_url: String,
     pub canonical_path: String,
     pub breadcrumbs: Vec<Crumb>,
