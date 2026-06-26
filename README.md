@@ -91,6 +91,14 @@ carry a canonical pointing to their `/docs/latest/` counterpart.
    `PodSpec`, `PodStatus`) get dedicated sections on the page with those fields
    listed, and the `spec`/`status` type labels in the main fields section link to
    those sections.
+   Composite field types are classified as **simple** or **complex**:
+   - *Simple* — all direct fields are scalars (no `$ref`). Expanded inline beneath
+     the field description: the type's own description in italic, then each sub-field
+     prefixed with the parent name (`hostAliases.ip`, `hostAliases.hostnames`).
+   - *Complex* — at least one direct field is a `$ref`. Rendered as a link to a
+     named `<section id="type-{name}">` that appears after the parent section
+     (fields, spec, status, or list). These sections are collected recursively in
+     DFS order and deduplicated — each type section appears at most once per page.
    Common definition types referenced by resource fields get their own pages at
    `/docs/{version}/common-definitions/{name}/`, with a listing page at
    `/docs/{version}/common-definitions/`.
@@ -98,8 +106,8 @@ carry a canonical pointing to their `/docs/latest/` counterpart.
 ## Development
 
 ```bash
-cargo test       # run all unit tests (82 tests, no network required)
-cargo clippy     # lint
+cargo test       # run all unit tests (109 tests, no network required)
+cargo fmt --check && cargo clippy -- -D warnings  # format + lint (CI gate)
 ```
 
 Before regenerating the site, ensure no process (e.g. a local preview server)
