@@ -1660,6 +1660,115 @@ mod tests {
     }
 
     #[test]
+    fn common_def_with_no_fields_omits_fields_section() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("IntOrString")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/intorstring/index.html"),
+        )
+        .unwrap();
+        assert!(
+            !html.contains("Fields"),
+            "common def page with no fields must not render a Fields section"
+        );
+        assert!(
+            !html.contains("No fields documented"),
+            "common def page with no fields must not show the no-fields message"
+        );
+    }
+
+    #[test]
+    fn common_def_with_fields_shows_fields_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cd = make_common_def("Condition");
+        cd.fields = vec![model_field("type", "Type of the condition.")];
+        render(
+            &[make_resource("Pod")],
+            &[cd],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/condition/index.html"),
+        )
+        .unwrap();
+        assert!(
+            html.contains("Fields"),
+            "common def page with fields must render a Fields section"
+        );
+        assert!(
+            html.contains("Type of the condition."),
+            "common def page must render the field description"
+        );
+    }
+
+    #[test]
+    fn common_def_index_groups_by_category() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[
+                make_common_def("ObjectMeta"),  // Metadata
+                make_common_def("Toleration"),  // Workload
+                make_common_def("Condition"),   // Status & Operations
+            ],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/index.html"),
+        )
+        .unwrap();
+        assert!(html.contains("Metadata"), "index must show Metadata category");
+        assert!(html.contains("Workload"), "index must show Workload category");
+        assert!(
+            html.contains("Status &amp; Operations"),
+            "index must show Status &amp; Operations category"
+        );
+    }
+
+    #[test]
+    fn common_def_index_metadata_before_workload() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[
+                make_common_def("Toleration"),  // Workload
+                make_common_def("ObjectMeta"),  // Metadata
+            ],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/index.html"),
+        )
+        .unwrap();
+        let metadata_pos = html.find("Metadata").unwrap();
+        let workload_pos = html.find("Workload").unwrap();
+        assert!(
+            metadata_pos < workload_pos,
+            "Metadata category must appear before Workload in the index"
+        );
+    }
+
+    #[test]
     fn resource_field_ref_to_common_def_gets_href() {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
