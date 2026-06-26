@@ -535,14 +535,23 @@ fn version_rank(v: &str) -> (u32, u32, u32) {
 fn common_def_category(name: &str) -> &'static str {
     match name {
         "ObjectMeta" | "ListMeta" => copy::CATEGORY_METADATA,
-        "ObjectReference" | "LocalObjectReference" | "TypedLocalObjectReference"
-        | "TypedObjectReference" | "CrossVersionObjectReference" | "BoundObjectReference" => {
-            copy::CATEGORY_REFERENCES
-        }
-        "LabelSelector" | "NodeSelector" | "NodeSelectorRequirement" | "ObjectFieldSelector"
+        "ObjectReference"
+        | "LocalObjectReference"
+        | "TypedLocalObjectReference"
+        | "TypedObjectReference"
+        | "CrossVersionObjectReference"
+        | "BoundObjectReference" => copy::CATEGORY_REFERENCES,
+        "LabelSelector"
+        | "NodeSelector"
+        | "NodeSelectorRequirement"
+        | "ObjectFieldSelector"
         | "ResourceFieldSelector" => copy::CATEGORY_SELECTORS,
-        "ResourceRequirements" | "Toleration" | "ContainerRestartRule" | "FileKeySelector"
-        | "PodCertificateProjection" | "PodSchedulingGroup" => copy::CATEGORY_WORKLOAD,
+        "ResourceRequirements"
+        | "Toleration"
+        | "ContainerRestartRule"
+        | "FileKeySelector"
+        | "PodCertificateProjection"
+        | "PodSchedulingGroup" => copy::CATEGORY_WORKLOAD,
         "Condition" | "Status" | "DeleteOptions" | "Patch" => copy::CATEGORY_STATUS_OPS,
         "Quantity" | "IntOrString" => copy::CATEGORY_TYPES,
         _ => copy::CATEGORY_OTHER,
@@ -1719,22 +1728,26 @@ mod tests {
         render(
             &[make_resource("Pod")],
             &[
-                make_common_def("ObjectMeta"),  // Metadata
-                make_common_def("Toleration"),  // Workload
-                make_common_def("Condition"),   // Status & Operations
+                make_common_def("ObjectMeta"), // Metadata
+                make_common_def("Toleration"), // Workload
+                make_common_def("Condition"),  // Status & Operations
             ],
             dir.path(),
             "https://example.com",
             false,
         )
         .unwrap();
-        let html = std::fs::read_to_string(
-            dir.path()
-                .join("docs/v1.33/common-definitions/index.html"),
-        )
-        .unwrap();
-        assert!(html.contains("Metadata"), "index must show Metadata category");
-        assert!(html.contains("Workload"), "index must show Workload category");
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/common-definitions/index.html"))
+                .unwrap();
+        assert!(
+            html.contains("Metadata"),
+            "index must show Metadata category"
+        );
+        assert!(
+            html.contains("Workload"),
+            "index must show Workload category"
+        );
         assert!(
             html.contains("Status &amp; Operations"),
             "index must show Status &amp; Operations category"
@@ -1747,19 +1760,17 @@ mod tests {
         render(
             &[make_resource("Pod")],
             &[
-                make_common_def("Toleration"),  // Workload
-                make_common_def("ObjectMeta"),  // Metadata
+                make_common_def("Toleration"), // Workload
+                make_common_def("ObjectMeta"), // Metadata
             ],
             dir.path(),
             "https://example.com",
             false,
         )
         .unwrap();
-        let html = std::fs::read_to_string(
-            dir.path()
-                .join("docs/v1.33/common-definitions/index.html"),
-        )
-        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/common-definitions/index.html"))
+                .unwrap();
         let metadata_pos = html.find("Metadata").unwrap();
         let workload_pos = html.find("Workload").unwrap();
         assert!(
