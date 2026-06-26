@@ -51,6 +51,7 @@ pub struct Crumb {
 pub struct FieldCtx {
     pub name: String,
     pub required: bool,
+    pub type_prefix: String,
     pub type_display: String,
     pub type_href: Option<String>,
     pub description: String,

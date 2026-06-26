@@ -668,6 +668,7 @@ fn field_ref_name(ft: &crate::model::FieldType) -> Option<String> {
     match ft {
         FieldType::Ref(name) => Some(name.clone()),
         FieldType::Array(inner) => field_ref_name(inner),
+        FieldType::Map(inner) => field_ref_name(inner),
         _ => None,
     }
 }
