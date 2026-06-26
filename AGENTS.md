@@ -29,7 +29,7 @@ src/
   fetcher.rs       GitHub Contents API → download *_openapi.json files
   model.rs         Public data types: Resource, CommonDefinition, Field, FieldType
   parser/
-    mod.rs         Orchestrate: per-file parse → post-process → (Vec<Resource>, Vec<CommonDefinition>)
+    mod.rs         Orchestrate: per-file parse → post-process → ParseResult
     schema.rs      serde structs for raw OpenAPI (RawSpec, RawSchema, RawProperty, RawGVK)
     resolve.rs     $ref / allOf resolution → FieldType; short_name() strips schema prefix
   renderer/
@@ -38,10 +38,10 @@ src/
     sitemap.rs     Pure-Rust sitemap.xml generation
 templates/
   base.html              DOCTYPE, <head>, breadcrumb nav, CSS, {% block content %}
-  resource.html          extends base — field_dl macro, fields / spec / status / list sections
+  resource.html          extends base — field_dl + render_type_section macros; fields / spec / status / list + type sections
   group_index.html       extends base — one row per kind, all versions on same line
   version_index.html     extends base — list of groups for a k8s version
-  common_def.html        extends base — name, description, and fields for a single common definition
+  common_def.html        extends base — name, description, fields, and type sections for a single common definition
   common_defs_index.html extends base — listing of all referenced common definitions for a k8s version
 ```
 
@@ -62,6 +62,11 @@ templates/
      `CommonDefinition` values. During field building, `collect_common_def_refs`
      records which of those names appear as `Ref` or `Array(Ref(...))` field types
      in any resource; `parse_specs` retains only the referenced subset.
+   - Every schema is classified as **simple** (no direct `$ref` field) or **complex**
+     (at least one direct field — after unwrapping `[]`/`map[]` — is a `$ref`).
+     Classification is one level deep and non-recursive. Schemas for each class are
+     stored in `ParseResult.simple_types` / `ParseResult.complex_types`
+     (`HashMap<String, (description, Vec<Field>)>`).
    - Remaining resources are sorted by `kind`; common definitions are sorted by `name`.
 4. **Render**: `renderer::render` writes index pages + one page per resource + common definition pages.
 
@@ -114,11 +119,12 @@ listed at https://web.archive.org/web/20240227200353/https://kubernetes.io/docs/
 that appear as field types across many resources. They have no
 `x-kubernetes-group-version-kind` entry and do not belong to a specific API group.
 
-**Candidate list** — `COMMON_DEF_NAMES` in `parser/mod.rs` lists 13 names sourced
-from the above URL. All 13 are extracted from spec files into `Vec<CommonDefinition>`
-via a second pass in `parse_spec_file`. `emitted_common` deduplicates them across
-files (spec files are self-contained, so each schema appears in many files with
-identical content; the first occurrence wins).
+**Candidate list** — `COMMON_DEF_NAMES` in `parser/mod.rs` lists names sourced
+from the above URL plus extras (`Time`, `PodSpec`, `PodTemplateSpec`, …). All are
+extracted from spec files into `Vec<CommonDefinition>` via a second pass in
+`parse_spec_file`. `emitted_common` deduplicates them across files (spec files are
+self-contained, so each schema appears in many files with identical content; the
+first occurrence wins).
 
 **Filtering** — only definitions actually referenced as a `Ref` or `Array(Ref(…))`
 field type in at least one resource (main, spec, status, or list fields) are kept.
@@ -160,6 +166,89 @@ same file (e.g. `PodSpec`, `PodStatus`) get those fields extracted at parse time
   list section, each with `id="{kind_lower}spec"` / `id="{kind_lower}status"`.
 - Both sections are conditional on `spec_fields` / `status_fields` being non-empty,
   so resources like ConfigMap that have neither are unaffected.
+
+### Type classification: simple vs complex
+
+Every composite schema (one that has `properties`) is classified during parsing:
+
+- **Simple** — all direct `properties` (after recursively unwrapping `[]`/`map[]`
+  wrappers via `prop_has_ref`) are non-`$ref`. Example: `Toleration`.
+- **Complex** — at least one direct property is or wraps a `$ref`. Example: `Container`.
+
+Classification is **one level deep** — only the type's own direct fields are
+inspected, not their transitive types.
+
+`prop_has_ref(prop)` in `parser/mod.rs` returns true when a raw property's leaf is
+a `$ref`, walking through `allOf`, array `items`, and `additionalProperties`.
+
+Results live in `ParseResult.classifications: HashMap<String, bool>` (true = complex)
+and the type data maps `simple_types` / `complex_types`:
+`HashMap<String, (String, Vec<Field>)>` — schema short name → (description, fields).
+First occurrence across spec files wins; deduplication matches `emitted` logic.
+
+### Rendering simple types (inline expansion)
+
+In `build_fields_ctx`, when a field's type is simple and has no existing cross-page
+link (common def or resource page):
+- `type_href` is left `None`; `type_ref` is left `None`.
+- `type_description` is set to the type's description (rendered as italic in the
+  template below the field description).
+- `sub_fields: Vec<FieldCtx>` is populated with the type's fields, each named
+  `{parentField}.{subField}` (e.g. `hostAliases.ip`), ordered by `order_fields`.
+
+### Rendering complex types (type sections)
+
+In `build_fields_ctx`, when a field's type is complex and has no existing link:
+- `type_href` is set to `#type-{name_lower}` (in-page anchor).
+- `type_ref` stores the schema short name (e.g. `"Container"`).
+- No inline expansion is done.
+
+After building each field list, `collect_type_sections` walks the `type_ref` fields
+recursively (DFS) and builds a flat `Vec<TypeSectionCtx>` in DFS order:
+
+```rust
+struct TypeSectionCtx {
+    anchor: String,   // "type-container"
+    name: String,     // "Container"
+    description: String,
+    fields: Vec<FieldCtx>,
+}
+```
+
+A `visited: HashSet<String>` shared across all four section calls per resource page
+prevents the same type from appearing more than once. Each `TypeSectionCtx` is
+rendered as a `<section class="type-section" id="...">` immediately after the section
+that first referenced it (fields → spec → status → list).
+
+The `spec` / `status` fields in the main field list are special-cased: when
+`spec_fields` / `status_fields` are non-empty, `type_href` is overridden to the
+sub-section anchor (`#podspec`) and `type_ref` is cleared, so no type section is
+generated for those two fields.
+
+### `ParseResult` and `TypeMaps`
+
+`parser::parse_specs` returns `ParseResult` (a named struct instead of a tuple):
+
+```rust
+pub struct ParseResult {
+    pub resources: Vec<Resource>,
+    pub common_defs: Vec<CommonDefinition>,
+    pub classifications: HashMap<String, bool>,
+    pub simple_types: TypeData,   // HashMap<String, (String, Vec<Field>)>
+    pub complex_types: TypeData,
+}
+```
+
+`renderer::render` accepts a `&TypeMaps<'_>` instead of three separate map
+arguments:
+
+```rust
+pub struct TypeMaps<'a> {
+    pub classifications: &'a HashMap<String, bool>,
+    pub simple_types: &'a TypeData,
+    pub complex_types: &'a TypeData,
+}
+```
 
 ### Field ordering on resource pages
 1. `apiVersion`, `kind`, `metadata` — always first, in that order
@@ -207,11 +296,15 @@ live in `src/renderer/copy.rs`, not be hardcoded in `renderer/mod.rs` or templat
   literal `/` in the template body instead — literal characters are never escaped.
   Example: `{% if group == "core" %}{{ v }}{% else %}{{ group }}/{{ v }}{% endif %}`
   `~` is safe for non-path strings (e.g. `kind ~ "List"` for section headings).
-- `resource.html` defines a `field_dl(fields, copy, group_display, api_version, kind_value)` macro
-  that renders a `<dl>` for any field list. `kind_value` controls apiVersion/kind
-  special-casing: pass `none` (default) for plain sections (spec, status), pass
-  `kind` for the resource section, or `kind ~ "List"` for the list section. This
-  avoids repeating the `<dt>`/`<dd>` rendering logic across four sections.
+- `resource.html` defines two macros:
+  - `field_dl(fields, copy, group_display, api_version, kind_value)` — renders a
+    `<dl>` for any field list. `kind_value` controls apiVersion/kind special-casing:
+    pass `none` (default) for plain sections (spec, status), `kind` for the resource
+    section, or `kind ~ "List"` for the list section. Inline-expands simple types
+    (type description in italic + sub-fields in a nested `<dl class="sub-fields">`).
+  - `render_type_section(ts, copy)` — renders a `<section class="type-section">` for
+    a `TypeSectionCtx`. Called after each of the four field sections for any type
+    sections collected from that section's fields.
 - `ResourcePageCtx` passes `kind_lower` (the lowercased kind) to the template so
   spec/status section anchor IDs (`id="podspec"`, `id="podstatus"`) can be built
   without string manipulation in the template.

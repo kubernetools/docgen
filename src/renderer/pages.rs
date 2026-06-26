@@ -12,6 +12,7 @@ pub struct CommonDefPageCtx {
     pub name: String,
     pub description: String,
     pub fields: Vec<FieldCtx>,
+    pub type_sections: Vec<TypeSectionCtx>,
     pub k8s_version: String,
     pub k8s_version_display: String,
     pub canonical_url: String,
@@ -48,13 +49,25 @@ pub struct Crumb {
 }
 
 #[derive(Serialize)]
+pub struct TypeSectionCtx {
+    pub anchor: String,
+    pub name: String,
+    pub description: String,
+    pub fields: Vec<FieldCtx>,
+}
+
+#[derive(Serialize)]
 pub struct FieldCtx {
     pub name: String,
     pub required: bool,
     pub type_prefix: String,
     pub type_display: String,
     pub type_href: Option<String>,
+    pub type_classification: Option<String>,
+    pub type_ref: Option<String>,
     pub description: String,
+    pub type_description: Option<String>,
+    pub sub_fields: Vec<FieldCtx>,
 }
 
 #[derive(Serialize)]
@@ -69,12 +82,16 @@ pub struct ResourcePageCtx {
     pub fields: Vec<FieldCtx>,
     pub list_description: String,
     pub list_fields: Vec<FieldCtx>,
+    pub field_type_sections: Vec<TypeSectionCtx>,
     pub spec_name: String,
     pub spec_description: String,
     pub spec_fields: Vec<FieldCtx>,
+    pub spec_type_sections: Vec<TypeSectionCtx>,
     pub status_name: String,
     pub status_description: String,
     pub status_fields: Vec<FieldCtx>,
+    pub status_type_sections: Vec<TypeSectionCtx>,
+    pub list_type_sections: Vec<TypeSectionCtx>,
     pub other_versions: Vec<VersionLink>,
     pub canonical_url: String,
     pub canonical_path: String,

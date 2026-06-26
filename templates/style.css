@@ -50,3 +50,8 @@ footer {
 }
 nav ul { list-style: none; padding: 0; }
 nav ul li { margin: 0.4rem 0; }
+.type-desc { margin: 0.4rem 0 0.6rem; color: #555; }
+.sub-fields { margin: 0.4rem 0 0 1.5rem; border-left: 2px solid #e0e0e0; padding-left: 1rem; }
+.type-section { margin-top: 2rem; padding: 1rem 1.25rem; background: #f8f9fa; border-left: 3px solid #adb5bd; border-radius: 0 4px 4px 0; }
+.type-section h3 { margin: 0 0 0.5rem; font-size: 1.1em; }
+.type-section-desc { margin-bottom: 0.75rem; color: #555; }

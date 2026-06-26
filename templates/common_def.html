@@ -5,6 +5,33 @@
 {% block meta_description %}{{ meta_description }}{% endblock %}
 
 {% block content %}
+{% macro render_type_section(ts, copy) %}
+<section class="type-section" id="{{ ts.anchor }}">
+  <h3>{{ ts.name }}</h3>
+  {% if ts.description %}
+  <div class="type-section-desc">{{ ts.description | safe }}</div>
+  {% endif %}
+  <dl>
+    {% for field in ts.fields %}
+    <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}{{ field.type_prefix }}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_prefix }}{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %})</span></dt>
+    <dd>
+      {{ field.description | safe if field.description else copy.msg_no_description }}
+      {% if field.type_description %}
+      <p class="type-desc"><em>{{ field.type_description | safe }}</em></p>
+      {% endif %}
+      {% if field.sub_fields %}
+      <dl class="sub-fields">
+        {% for sf in field.sub_fields %}
+        <dt{% if sf.required %} class="req"{% endif %}>{{ sf.name }} <span class="type">({{ sf.type_prefix }}{{ sf.type_display }})</span></dt>
+        <dd>{{ sf.description | safe if sf.description else copy.msg_no_description }}</dd>
+        {% endfor %}
+      </dl>
+      {% endif %}
+    </dd>
+    {% endfor %}
+  </dl>
+</section>
+{% endmacro %}
 <article>
   <h1>{{ name }}</h1>
   {% if description %}
@@ -16,10 +43,26 @@
     <dl>
       {% for field in fields %}
       <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}{{ field.type_prefix }}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_prefix }}{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %})</span></dt>
-      <dd>{{ field.description | safe if field.description else copy.msg_no_description }}</dd>
+      <dd>
+        {{ field.description | safe if field.description else copy.msg_no_description }}
+        {% if field.type_description %}
+        <p class="type-desc"><em>{{ field.type_description | safe }}</em></p>
+        {% endif %}
+        {% if field.sub_fields %}
+        <dl class="sub-fields">
+          {% for sf in field.sub_fields %}
+          <dt{% if sf.required %} class="req"{% endif %}>{{ sf.name }} <span class="type">({{ sf.type_prefix }}{{ sf.type_display }})</span></dt>
+          <dd>{{ sf.description | safe if sf.description else copy.msg_no_description }}</dd>
+          {% endfor %}
+        </dl>
+        {% endif %}
+      </dd>
       {% endfor %}
     </dl>
   </section>
+  {% for ts in type_sections %}
+  {{ render_type_section(ts, copy) }}
+  {% endfor %}
   {% endif %}
 </article>
 {% endblock %}
