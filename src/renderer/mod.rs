@@ -630,8 +630,20 @@ fn ref_name(ft: &FieldType) -> Option<String> {
     match ft {
         FieldType::Ref(name) => Some(name.clone()),
         FieldType::Array(inner) => ref_name(inner),
+        FieldType::Map(inner) => ref_name(inner),
         _ => None,
     }
+}
+
+// Returns (prefix, ref_name) where prefix is the non-linked leading text.
+// e.g. Map(Ref("Quantity")) → ("map[string]", "Quantity")
+//      Array(Ref("Quantity")) → ("[]", "Quantity")
+//      Ref("Quantity")        → ("", "Quantity")
+fn ref_type_parts(ft: &FieldType) -> Option<(String, String)> {
+    let name = ref_name(ft)?;
+    let full = fmt_field_type(ft);
+    let prefix = full.strip_suffix(&name).unwrap_or("").to_string();
+    Some((prefix, name))
 }
 
 fn md_to_html(md: &str) -> String {
@@ -735,17 +747,21 @@ fn build_fields_ctx(
     fields
         .iter()
         .map(|f| {
-            let type_display = fmt_field_type(&f.field_type);
-            let type_href = ref_name(&f.field_type)
-                .and_then(|name| {
-                    common_def_paths
+            let (type_prefix, type_display, type_href) = match ref_type_parts(&f.field_type)
+                .and_then(|(prefix, name)| {
+                    let href = common_def_paths
                         .get(&name)
                         .or_else(|| kind_paths.get(&name))
-                })
-                .cloned();
+                        .cloned()?;
+                    Some((prefix, name, href))
+                }) {
+                Some((prefix, label, href)) => (prefix, label, Some(href)),
+                None => (String::new(), fmt_field_type(&f.field_type), None),
+            };
             FieldCtx {
                 name: f.name.clone(),
                 required: f.required,
+                type_prefix,
                 type_display,
                 type_href,
                 description: md_to_html(&f.description),
@@ -762,6 +778,7 @@ mod tests {
         FieldCtx {
             name: name.to_string(),
             required,
+            type_prefix: String::new(),
             type_display: "string".to_string(),
             type_href: None,
             description: String::new(),
@@ -1969,6 +1986,139 @@ mod tests {
         assert!(
             sitemap.contains("/docs/latest/common-definitions/"),
             "sitemap must include common definitions index URL"
+        );
+    }
+
+    // ref_type_parts unit tests
+
+    #[test]
+    fn ref_type_parts_direct_ref() {
+        let ft = FieldType::Ref("Quantity".into());
+        let (prefix, name) = ref_type_parts(&ft).unwrap();
+        assert_eq!(prefix, "");
+        assert_eq!(name, "Quantity");
+    }
+
+    #[test]
+    fn ref_type_parts_array_of_ref() {
+        let ft = FieldType::Array(Box::new(FieldType::Ref("Quantity".into())));
+        let (prefix, name) = ref_type_parts(&ft).unwrap();
+        assert_eq!(prefix, "[]");
+        assert_eq!(name, "Quantity");
+    }
+
+    #[test]
+    fn ref_type_parts_map_of_ref() {
+        let ft = FieldType::Map(Box::new(FieldType::Ref("Quantity".into())));
+        let (prefix, name) = ref_type_parts(&ft).unwrap();
+        assert_eq!(prefix, "map[string]");
+        assert_eq!(name, "Quantity");
+    }
+
+    #[test]
+    fn ref_type_parts_scalar_returns_none() {
+        let ft = FieldType::Scalar("string".into());
+        assert!(ref_type_parts(&ft).is_none());
+    }
+
+    #[test]
+    fn ref_type_parts_map_of_scalar_returns_none() {
+        let ft = FieldType::Map(Box::new(FieldType::Scalar("string".into())));
+        assert!(ref_type_parts(&ft).is_none());
+    }
+
+    // render tests — only the ref name is linked, prefix is plain text
+
+    fn map_ref_field(name: &str, ref_type: &str) -> crate::model::Field {
+        crate::model::Field {
+            name: name.into(),
+            description: String::new(),
+            required: false,
+            field_type: crate::model::FieldType::Map(Box::new(crate::model::FieldType::Ref(
+                ref_type.into(),
+            ))),
+        }
+    }
+
+    fn array_ref_field(name: &str, ref_type: &str) -> crate::model::Field {
+        crate::model::Field {
+            name: name.into(),
+            description: String::new(),
+            required: false,
+            field_type: crate::model::FieldType::Array(Box::new(crate::model::FieldType::Ref(
+                ref_type.into(),
+            ))),
+        }
+    }
+
+    #[test]
+    fn map_ref_field_links_only_ref_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![map_ref_field("overhead", "Quantity")];
+        render(
+            &[r],
+            &[make_common_def("Quantity")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains(r#"map[string]<a href="/docs/v1.33/common-definitions/quantity/"#),
+            "prefix map[string] must be plain text; only Quantity must be the link"
+        );
+        assert!(
+            !html.contains(r#"><a href="/docs/v1.33/common-definitions/quantity/"#),
+            "the link must not start immediately after '>': prefix must precede it"
+        );
+    }
+
+    #[test]
+    fn array_ref_field_links_only_ref_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![array_ref_field("tolerations", "Toleration")];
+        render(
+            &[r],
+            &[make_common_def("Toleration")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains(r#"[]<a href="/docs/v1.33/common-definitions/toleration/"#),
+            "prefix [] must be plain text; only Toleration must be the link"
+        );
+    }
+
+    #[test]
+    fn map_of_scalar_field_has_no_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![crate::model::Field {
+            name: "labels".into(),
+            description: String::new(),
+            required: false,
+            field_type: crate::model::FieldType::Map(Box::new(crate::model::FieldType::Scalar(
+                "string".into(),
+            ))),
+        }];
+        render(&[r], &[], dir.path(), "https://example.com", false).unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("map[string]string"),
+            "map[string]string must be rendered as plain text"
+        );
+        assert!(
+            !html.contains(r#"map[string]string</a>"#),
+            "map[string]string must not be wrapped in a link"
         );
     }
 }
