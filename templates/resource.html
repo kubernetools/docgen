@@ -15,7 +15,7 @@
   {% elif kind_value is not none and field.name == "kind" %}
   <dt>kind: <code>{{ kind_value }}</code></dt>
   {% else %}
-  <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}{{ field.type_prefix }}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_prefix }}{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}{% if field.type_classification %} <span class="ref-cls ref-cls--{{ field.type_classification }}">{{ field.type_classification }}</span>{% endif %})</span></dt>
+  <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}{{ field.type_prefix }}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_prefix }}{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %})</span></dt>
   <dd>
     {{ field.description | safe if field.description else copy.msg_no_description }}
     {% if field.type_description %}
@@ -33,6 +33,15 @@
   {% endif %}
   {% endfor %}
 </dl>
+{% endmacro %}
+{% macro render_type_section(ts, copy) %}
+<section class="type-section" id="{{ ts.anchor }}">
+  <h3>{{ ts.name }}</h3>
+  {% if ts.description %}
+  <div class="type-section-desc">{{ ts.description | safe }}</div>
+  {% endif %}
+  {{ field_dl(ts.fields, copy) }}
+</section>
 {% endmacro %}
 <article>
   <h1>{{ kind }} <span class="badge">{{ group_display }}/{{ api_version }}</span></h1>
@@ -54,6 +63,9 @@
     <p>{{ copy.msg_no_fields }}</p>
     {% endif %}
   </section>
+  {% for ts in field_type_sections %}
+  {{ render_type_section(ts, copy) }}
+  {% endfor %}
   {% if spec_fields %}
   <section aria-labelledby="{{ spec_name | lower }}">
     <h2 id="{{ spec_name | lower }}">{{ spec_name }}</h2>
@@ -62,6 +74,9 @@
     {% endif %}
     {{ field_dl(spec_fields, copy) }}
   </section>
+  {% for ts in spec_type_sections %}
+  {{ render_type_section(ts, copy) }}
+  {% endfor %}
   {% endif %}
   {% if status_fields %}
   <section aria-labelledby="{{ status_name | lower }}">
@@ -71,6 +86,9 @@
     {% endif %}
     {{ field_dl(status_fields, copy) }}
   </section>
+  {% for ts in status_type_sections %}
+  {{ render_type_section(ts, copy) }}
+  {% endfor %}
   {% endif %}
   {% if list_fields %}
   <section aria-labelledby="list-heading">
@@ -80,6 +98,9 @@
     {% endif %}
     {{ field_dl(list_fields, copy, group_display, api_version, kind_value=kind ~ "List") }}
   </section>
+  {% for ts in list_type_sections %}
+  {{ render_type_section(ts, copy) }}
+  {% endfor %}
   {% endif %}
 </article>
 {% endblock %}
