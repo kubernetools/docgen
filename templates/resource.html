@@ -42,8 +42,8 @@
     {% endif %}
   </section>
   {% if spec_fields %}
-  <section aria-labelledby="{{ kind_lower }}spec">
-    <h2 id="{{ kind_lower }}spec">{{ kind }}Spec</h2>
+  <section aria-labelledby="{{ spec_name | lower }}">
+    <h2 id="{{ spec_name | lower }}">{{ spec_name }}</h2>
     {% if spec_description %}
     {{ spec_description | safe }}
     {% endif %}
@@ -51,8 +51,8 @@
   </section>
   {% endif %}
   {% if status_fields %}
-  <section aria-labelledby="{{ kind_lower }}status">
-    <h2 id="{{ kind_lower }}status">{{ kind }}Status</h2>
+  <section aria-labelledby="{{ status_name | lower }}">
+    <h2 id="{{ status_name | lower }}">{{ status_name }}</h2>
     {% if status_description %}
     {{ status_description | safe }}
     {% endif %}

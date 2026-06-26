@@ -251,9 +251,9 @@ pub fn render(
                 // Link spec/status type labels to their in-page section anchors.
                 for f in &mut fields {
                     if f.name == "spec" && !resource.spec_fields.is_empty() {
-                        f.type_href = Some(format!("#{kind_lower}spec"));
+                        f.type_href = Some(format!("#{}", resource.spec_name.to_lowercase()));
                     } else if f.name == "status" && !resource.status_fields.is_empty() {
-                        f.type_href = Some(format!("#{kind_lower}status"));
+                        f.type_href = Some(format!("#{}", resource.status_name.to_lowercase()));
                     }
                 }
                 let list_fields = order_fields(build_fields_ctx(
@@ -305,8 +305,10 @@ pub fn render(
                     fields,
                     list_description: md_to_html(&resource.list_description),
                     list_fields,
+                    spec_name: resource.spec_name.clone(),
                     spec_description: md_to_html(&resource.spec_description),
                     spec_fields,
+                    status_name: resource.status_name.clone(),
                     status_description: md_to_html(&resource.status_description),
                     status_fields,
                     other_versions,
@@ -785,8 +787,10 @@ mod tests {
             fields: vec![],
             list_description: String::new(),
             list_fields: vec![],
+            spec_name: String::new(),
             spec_description: String::new(),
             spec_fields: vec![],
+            status_name: String::new(),
             status_description: String::new(),
             status_fields: vec![],
         };
@@ -806,8 +810,10 @@ mod tests {
             fields: vec![],
             list_description: String::new(),
             list_fields: vec![],
+            spec_name: String::new(),
             spec_description: String::new(),
             spec_fields: vec![],
+            status_name: String::new(),
             status_description: String::new(),
             status_fields: vec![],
         };
@@ -840,8 +846,10 @@ mod tests {
             fields: vec![],
             list_description: String::new(),
             list_fields: vec![],
+            spec_name: String::new(),
             spec_description: String::new(),
             spec_fields: vec![],
+            status_name: String::new(),
             status_description: String::new(),
             status_fields: vec![],
         }
@@ -1293,8 +1301,10 @@ mod tests {
             )],
             list_description: String::new(),
             list_fields: vec![],
+            spec_name: String::new(),
             spec_description: String::new(),
             spec_fields: vec![],
+            status_name: String::new(),
             status_description: String::new(),
             status_fields: vec![],
         };
@@ -1370,6 +1380,7 @@ mod tests {
     fn spec_section_renders_when_spec_fields_present() {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
+        r.spec_name = "PodSpec".into();
         r.spec_description = "PodSpec is a description of a pod.".into();
         r.spec_fields = vec![
             model_field("nodeName", "Name of the node."),
@@ -1401,6 +1412,7 @@ mod tests {
     fn status_section_renders_when_status_fields_present() {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
+        r.status_name = "PodStatus".into();
         r.status_description = "PodStatus represents the status of a pod.".into();
         r.status_fields = vec![
             model_field("hostIP", "IP address of the host."),
@@ -1432,6 +1444,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
         r.fields = vec![ref_field("spec", "PodSpec", "Spec of the pod.")];
+        r.spec_name = "PodSpec".into();
         r.spec_fields = vec![model_field("nodeName", "Name of the node.")];
         render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
@@ -1447,6 +1460,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
         r.fields = vec![ref_field("status", "PodStatus", "Status of the pod.")];
+        r.status_name = "PodStatus".into();
         r.status_fields = vec![model_field("phase", "Phase of the pod.")];
         render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
@@ -1497,9 +1511,39 @@ mod tests {
     }
 
     #[test]
-    fn spec_section_anchor_uses_lowercase_kind() {
+    fn spec_section_uses_referenced_schema_name_not_kind_name() {
+        // LocalSubjectAccessReview has a spec field of type SubjectAccessReviewSpec,
+        // so the section heading and anchor must say SubjectAccessReviewSpec, not
+        // LocalSubjectAccessReviewSpec.
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("LocalSubjectAccessReview");
+        r.spec_name = "SubjectAccessReviewSpec".into();
+        r.spec_fields = vec![model_field("user", "User is the user you're testing for.")];
+        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/latest/core/v1/localsubjectaccessreview/index.html"),
+        )
+        .unwrap();
+        assert!(
+            html.contains(r#"id="subjectaccessreviewspec""#),
+            "spec section id must use the referenced schema name"
+        );
+        assert!(
+            html.contains("SubjectAccessReviewSpec"),
+            "spec heading must say SubjectAccessReviewSpec"
+        );
+        assert!(
+            !html.contains("LocalSubjectAccessReviewSpec"),
+            "spec heading must not use the resource kind name"
+        );
+    }
+
+    #[test]
+    fn spec_section_anchor_uses_lowercase_spec_name() {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("ReplicaSet");
+        r.spec_name = "ReplicaSetSpec".into();
         r.spec_fields = vec![model_field("replicas", "Number of replicas.")];
         render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
         let html =
@@ -1507,7 +1551,7 @@ mod tests {
                 .unwrap();
         assert!(
             html.contains(r#"id="replicasetspec""#),
-            "spec section id must be lowercase kind + spec"
+            "spec section id must be lowercase spec name"
         );
     }
 
