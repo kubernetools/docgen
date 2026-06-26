@@ -364,21 +364,12 @@ pub fn render(
             let idx_canonical_path = "/docs/latest/common-definitions/".to_string();
             sitemap_urls.push(format!("{base_url}{idx_canonical_path}"));
 
-            let def_links: Vec<CommonDefLink> = version_common_defs
-                .iter()
-                .map(|cd| CommonDefLink {
-                    name: cd.name.clone(),
-                    href: format!(
-                        "/docs/{nav_prefix}/common-definitions/{}/",
-                        cd.name.to_lowercase()
-                    ),
-                })
-                .collect();
+            let categories = group_common_defs_by_category(version_common_defs, nav_prefix);
 
             let idx_ctx = CommonDefsIndexCtx {
                 k8s_version: k8s_version.clone(),
                 k8s_version_display: version_label.clone(),
-                definitions: def_links,
+                categories,
                 canonical_url: format!("{base_url}{idx_canonical_path}"),
                 canonical_path: idx_canonical_path,
                 breadcrumbs: vec![
@@ -539,6 +530,73 @@ fn version_rank(v: &str) -> (u32, u32, u32) {
     } else {
         (s.parse().unwrap_or(0), 2, 0)
     }
+}
+
+fn common_def_category(name: &str) -> &'static str {
+    match name {
+        "ObjectMeta" | "ListMeta" => copy::CATEGORY_METADATA,
+        "ObjectReference"
+        | "LocalObjectReference"
+        | "TypedLocalObjectReference"
+        | "TypedObjectReference"
+        | "CrossVersionObjectReference"
+        | "BoundObjectReference" => copy::CATEGORY_REFERENCES,
+        "LabelSelector"
+        | "NodeSelector"
+        | "NodeSelectorRequirement"
+        | "ObjectFieldSelector"
+        | "ResourceFieldSelector" => copy::CATEGORY_SELECTORS,
+        "ResourceRequirements"
+        | "Toleration"
+        | "ContainerRestartRule"
+        | "FileKeySelector"
+        | "PodCertificateProjection"
+        | "PodSchedulingGroup" => copy::CATEGORY_WORKLOAD,
+        "Condition" | "Status" | "DeleteOptions" | "Patch" => copy::CATEGORY_STATUS_OPS,
+        "Quantity" | "IntOrString" => copy::CATEGORY_TYPES,
+        _ => copy::CATEGORY_OTHER,
+    }
+}
+
+fn group_common_defs_by_category(
+    defs: &[&CommonDefinition],
+    nav_prefix: &str,
+) -> Vec<CommonDefCategory> {
+    const ORDER: &[&str] = &[
+        copy::CATEGORY_METADATA,
+        copy::CATEGORY_REFERENCES,
+        copy::CATEGORY_SELECTORS,
+        copy::CATEGORY_WORKLOAD,
+        copy::CATEGORY_STATUS_OPS,
+        copy::CATEGORY_TYPES,
+        copy::CATEGORY_OTHER,
+    ];
+
+    let mut buckets: std::collections::HashMap<&str, Vec<CommonDefLink>> =
+        std::collections::HashMap::new();
+    for cd in defs {
+        let link = CommonDefLink {
+            name: cd.name.clone(),
+            href: format!(
+                "/docs/{nav_prefix}/common-definitions/{}/",
+                cd.name.to_lowercase()
+            ),
+        };
+        buckets
+            .entry(common_def_category(&cd.name))
+            .or_default()
+            .push(link);
+    }
+
+    ORDER
+        .iter()
+        .filter_map(|&cat| {
+            buckets.remove(cat).map(|definitions| CommonDefCategory {
+                label: cat.to_string(),
+                definitions,
+            })
+        })
+        .collect()
 }
 
 fn group_seg(group: &str) -> String {
@@ -1607,6 +1665,117 @@ mod tests {
         assert!(
             !dir.path().join("docs/v1.33/common-definitions").exists(),
             "common-definitions directory must not be created when there are no common defs"
+        );
+    }
+
+    #[test]
+    fn common_def_with_no_fields_omits_fields_section() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("IntOrString")],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/intorstring/index.html"),
+        )
+        .unwrap();
+        assert!(
+            !html.contains("Fields"),
+            "common def page with no fields must not render a Fields section"
+        );
+        assert!(
+            !html.contains("No fields documented"),
+            "common def page with no fields must not show the no-fields message"
+        );
+    }
+
+    #[test]
+    fn common_def_with_fields_shows_fields_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cd = make_common_def("Condition");
+        cd.fields = vec![model_field("type", "Type of the condition.")];
+        render(
+            &[make_resource("Pod")],
+            &[cd],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/condition/index.html"),
+        )
+        .unwrap();
+        assert!(
+            html.contains("Fields"),
+            "common def page with fields must render a Fields section"
+        );
+        assert!(
+            html.contains("Type of the condition."),
+            "common def page must render the field description"
+        );
+    }
+
+    #[test]
+    fn common_def_index_groups_by_category() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[
+                make_common_def("ObjectMeta"), // Metadata
+                make_common_def("Toleration"), // Workload
+                make_common_def("Condition"),  // Status & Operations
+            ],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/common-definitions/index.html"))
+                .unwrap();
+        assert!(
+            html.contains("Metadata"),
+            "index must show Metadata category"
+        );
+        assert!(
+            html.contains("Workload"),
+            "index must show Workload category"
+        );
+        assert!(
+            html.contains("Status &amp; Operations"),
+            "index must show Status &amp; Operations category"
+        );
+    }
+
+    #[test]
+    fn common_def_index_metadata_before_workload() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[
+                make_common_def("Toleration"), // Workload
+                make_common_def("ObjectMeta"), // Metadata
+            ],
+            dir.path(),
+            "https://example.com",
+            false,
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/v1.33/common-definitions/index.html"))
+                .unwrap();
+        let metadata_pos = html.find("Metadata").unwrap();
+        let workload_pos = html.find("Workload").unwrap();
+        assert!(
+            metadata_pos < workload_pos,
+            "Metadata category must appear before Workload in the index"
         );
     }
 

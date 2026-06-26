@@ -43,6 +43,15 @@ pub fn title_resource(
     )
 }
 
+// ── Common definition categories ──────────────────────────────────────────────
+pub const CATEGORY_METADATA: &str = "Metadata";
+pub const CATEGORY_REFERENCES: &str = "Object References";
+pub const CATEGORY_SELECTORS: &str = "Selectors";
+pub const CATEGORY_WORKLOAD: &str = "Workload";
+pub const CATEGORY_STATUS_OPS: &str = "Status & Operations";
+pub const CATEGORY_TYPES: &str = "Types";
+pub const CATEGORY_OTHER: &str = "Other";
+
 // ── Common definitions ────────────────────────────────────────────────────────
 pub fn title_common_defs_index(k8s_version_display: &str) -> String {
     format!("Common Definitions &mdash; Kubernetes {k8s_version_display} | {SITE_TAGLINE}")
