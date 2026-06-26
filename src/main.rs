@@ -22,13 +22,14 @@ async fn main() -> Result<()> {
             println!("Fetching Kubernetes {k8s_version} specs...");
             let specs = fetcher::fetch_specs(&k8s_version, token.as_deref()).await?;
             println!("Parsing {} spec files...", specs.len());
-            let (resources, common_defs) = parser::parse_specs(specs, &k8s_version)?;
+            let (resources, common_defs, classifications, simple_type_data) =
+                parser::parse_specs(specs, &k8s_version)?;
             println!(
                 "Parsed {} resources ({} common definitions), rendering HTML...",
                 resources.len(),
                 common_defs.len()
             );
-            renderer::render(&resources, &common_defs, &out, &base_url, is_latest)?;
+            renderer::render(&resources, &common_defs, &out, &base_url, is_latest, &classifications, &simple_type_data)?;
         }
     }
     Ok(())

@@ -54,7 +54,10 @@ pub struct FieldCtx {
     pub type_prefix: String,
     pub type_display: String,
     pub type_href: Option<String>,
+    pub type_classification: Option<String>,
     pub description: String,
+    pub type_description: Option<String>,
+    pub sub_fields: Vec<FieldCtx>,
 }
 
 #[derive(Serialize)]

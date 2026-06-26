@@ -20,6 +20,8 @@ pub fn render(
     out: &Path,
     base_url: &str,
     is_latest: bool,
+    classifications: &std::collections::HashMap<String, bool>,
+    simple_types: &std::collections::HashMap<String, (String, Vec<crate::model::Field>)>,
 ) -> Result<()> {
     fs::create_dir_all(out.join("docs"))?;
     fs::write(
@@ -247,29 +249,43 @@ pub fn render(
                     &resource.fields,
                     &kind_paths,
                     &common_def_paths,
+                    classifications,
+                    simple_types,
                 ));
                 // Link spec/status type labels to their in-page section anchors.
                 for f in &mut fields {
                     if f.name == "spec" && !resource.spec_fields.is_empty() {
                         f.type_href = Some(format!("#{}", resource.spec_name.to_lowercase()));
+                        f.type_classification = None;
+                        f.type_description = None;
+                        f.sub_fields = vec![];
                     } else if f.name == "status" && !resource.status_fields.is_empty() {
                         f.type_href = Some(format!("#{}", resource.status_name.to_lowercase()));
+                        f.type_classification = None;
+                        f.type_description = None;
+                        f.sub_fields = vec![];
                     }
                 }
                 let list_fields = order_fields(build_fields_ctx(
                     &resource.list_fields,
                     &kind_paths,
                     &common_def_paths,
+                    classifications,
+                    simple_types,
                 ));
                 let spec_fields = order_fields(build_fields_ctx(
                     &resource.spec_fields,
                     &kind_paths,
                     &common_def_paths,
+                    classifications,
+                    simple_types,
                 ));
                 let status_fields = order_fields(build_fields_ctx(
                     &resource.status_fields,
                     &kind_paths,
                     &common_def_paths,
+                    classifications,
+                    simple_types,
                 ));
 
                 let meta_description =
@@ -403,8 +419,13 @@ pub fn render(
                 let canonical_url = format!("{base_url}{canonical_path}");
                 sitemap_urls.push(canonical_url.clone());
 
-                let fields =
-                    order_fields(build_fields_ctx(&cd.fields, &kind_paths, &common_def_paths));
+                let fields = order_fields(build_fields_ctx(
+                    &cd.fields,
+                    &kind_paths,
+                    &common_def_paths,
+                    classifications,
+                    simple_types,
+                ));
                 let ctx = CommonDefPageCtx {
                     name: cd.name.clone(),
                     description: md_to_html(&cd.description),
@@ -553,7 +574,7 @@ fn common_def_category(name: &str) -> &'static str {
         | "PodCertificateProjection"
         | "PodSchedulingGroup" => copy::CATEGORY_WORKLOAD,
         "Condition" | "Status" | "DeleteOptions" | "Patch" => copy::CATEGORY_STATUS_OPS,
-        "Quantity" | "IntOrString" => copy::CATEGORY_TYPES,
+        "Quantity" | "IntOrString" | "Time" => copy::CATEGORY_TYPES,
         _ => copy::CATEGORY_OTHER,
     }
 }
@@ -743,6 +764,8 @@ fn build_fields_ctx(
     fields: &[crate::model::Field],
     kind_paths: &std::collections::HashMap<String, String>,
     common_def_paths: &std::collections::HashMap<String, String>,
+    classifications: &std::collections::HashMap<String, bool>,
+    simple_types: &std::collections::HashMap<String, (String, Vec<crate::model::Field>)>,
 ) -> Vec<FieldCtx> {
     fields
         .iter()
@@ -758,16 +781,76 @@ fn build_fields_ctx(
                 Some((prefix, label, href)) => (prefix, label, Some(href)),
                 None => (String::new(), fmt_field_type(&f.field_type), None),
             };
+            // Only show classification when the type has no existing link:
+            // common-def and resource cross-references already have their own pages.
+            let type_classification = if type_href.is_none() {
+                ref_name(&f.field_type).and_then(|name| {
+                    classifications.get(&name).map(|&is_complex| {
+                        if is_complex { "complex".to_string() } else { "simple".to_string() }
+                    })
+                })
+            } else {
+                None
+            };
+            // Inline-expand simple types: show the type description and its fields.
+            let (type_description, sub_fields) =
+                if matches!(type_classification, Some(ref s) if s == "simple") {
+                    if let Some(rn) = ref_name(&f.field_type) {
+                        if let Some((desc, type_fields)) = simple_types.get(&rn) {
+                            let prefix = format!("{}.", f.name);
+                            let sfs = order_fields(
+                                type_fields
+                                    .iter()
+                                    .map(|sf| FieldCtx {
+                                        name: format!("{}{}", prefix, sf.name),
+                                        required: sf.required,
+                                        type_prefix: match &sf.field_type {
+                                            FieldType::Array(_) => "[]".to_string(),
+                                            FieldType::Map(_) => "map[string]".to_string(),
+                                            _ => String::new(),
+                                        },
+                                        type_display: fmt_field_type(
+                                            leaf_type(&sf.field_type),
+                                        ),
+                                        type_href: None,
+                                        type_classification: None,
+                                        description: md_to_html(&sf.description),
+                                        type_description: None,
+                                        sub_fields: vec![],
+                                    })
+                                    .collect(),
+                            );
+                            (Some(md_to_html(desc)), sfs)
+                        } else {
+                            (None, vec![])
+                        }
+                    } else {
+                        (None, vec![])
+                    }
+                } else {
+                    (None, vec![])
+                };
             FieldCtx {
                 name: f.name.clone(),
                 required: f.required,
                 type_prefix,
                 type_display,
                 type_href,
+                type_classification,
                 description: md_to_html(&f.description),
+                type_description,
+                sub_fields,
             }
         })
         .collect()
+}
+
+/// Returns the leaf FieldType after stripping Array/Map wrappers.
+fn leaf_type(ft: &FieldType) -> &FieldType {
+    match ft {
+        FieldType::Array(inner) | FieldType::Map(inner) => leaf_type(inner),
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -781,7 +864,10 @@ mod tests {
             type_prefix: String::new(),
             type_display: "string".to_string(),
             type_href: None,
+            type_classification: None,
             description: String::new(),
+            type_description: None,
+            sub_fields: vec![],
         }
     }
 
@@ -951,6 +1037,8 @@ mod tests {
             dir.path(),
             base,
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
@@ -964,7 +1052,7 @@ mod tests {
         );
 
         // Second render: Bar removed from the spec
-        render(&[make_resource("Foo")], &[], dir.path(), base, true).unwrap();
+        render(&[make_resource("Foo")], &[], dir.path(), base, true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
         assert!(
             sitemap.contains("/docs/latest/core/v1/foo/"),
@@ -981,7 +1069,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = "https://example.com";
 
-        render(&[make_resource("Pod")], &[], dir.path(), base, true).unwrap();
+        render(&[make_resource("Pod")], &[], dir.path(), base, true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
         assert!(
             sitemap.contains("/docs/latest/"),
@@ -1002,6 +1090,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
@@ -1020,6 +1110,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let robots = std::fs::read_to_string(dir.path().join("robots.txt")).unwrap();
@@ -1038,6 +1130,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let robots = std::fs::read_to_string(dir.path().join("robots.txt")).unwrap();
@@ -1057,6 +1151,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1080,6 +1176,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1111,6 +1209,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1134,6 +1234,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1171,6 +1273,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1194,6 +1298,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html = std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
@@ -1212,6 +1318,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1233,6 +1341,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         for path in [
@@ -1261,6 +1371,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1282,6 +1394,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html = std::fs::read_to_string(dir.path().join("docs/latest/core/index.html")).unwrap();
@@ -1302,6 +1416,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html = std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
@@ -1322,6 +1438,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1344,7 +1462,7 @@ mod tests {
             "apiVersion",
             "APIVersion defines the versioned schema.",
         )];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1383,7 +1501,7 @@ mod tests {
             status_description: String::new(),
             status_fields: vec![],
         };
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/apps/v1/deployment/index.html"))
                 .unwrap();
@@ -1401,7 +1519,7 @@ mod tests {
             "kind",
             "Kind is a string value representing the REST resource.",
         )];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1429,7 +1547,7 @@ mod tests {
                 "Kind is a string value representing the REST resource.",
             ),
         ];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1461,7 +1579,7 @@ mod tests {
             model_field("nodeName", "Name of the node."),
             model_field("restartPolicy", "Restart policy."),
         ];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1493,7 +1611,7 @@ mod tests {
             model_field("hostIP", "IP address of the host."),
             model_field("phase", "Phase of the pod."),
         ];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1521,7 +1639,7 @@ mod tests {
         r.fields = vec![ref_field("spec", "PodSpec", "Spec of the pod.")];
         r.spec_name = "PodSpec".into();
         r.spec_fields = vec![model_field("nodeName", "Name of the node.")];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1537,7 +1655,7 @@ mod tests {
         r.fields = vec![ref_field("status", "PodStatus", "Status of the pod.")];
         r.status_name = "PodStatus".into();
         r.status_fields = vec![model_field("phase", "Phase of the pod.")];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1552,7 +1670,7 @@ mod tests {
         let mut r = make_resource("Pod");
         r.fields = vec![ref_field("spec", "PodSpec", "Spec of the pod.")];
         // spec_fields left empty — no anchor should be generated
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1570,6 +1688,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1594,7 +1714,7 @@ mod tests {
         let mut r = make_resource("LocalSubjectAccessReview");
         r.spec_name = "SubjectAccessReviewSpec".into();
         r.spec_fields = vec![model_field("user", "User is the user you're testing for.")];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html = std::fs::read_to_string(
             dir.path()
                 .join("docs/latest/core/v1/localsubjectaccessreview/index.html"),
@@ -1620,7 +1740,7 @@ mod tests {
         let mut r = make_resource("ReplicaSet");
         r.spec_name = "ReplicaSetSpec".into();
         r.spec_fields = vec![model_field("replicas", "Number of replicas.")];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/replicaset/index.html"))
                 .unwrap();
@@ -1639,6 +1759,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1658,6 +1780,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1677,6 +1801,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1694,6 +1820,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html = std::fs::read_to_string(
@@ -1722,6 +1850,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html = std::fs::read_to_string(
@@ -1752,6 +1882,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1783,6 +1915,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1812,6 +1946,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -1831,6 +1967,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html = std::fs::read_to_string(dir.path().join("docs/v1.33/index.html")).unwrap();
@@ -1849,6 +1987,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html = std::fs::read_to_string(dir.path().join("docs/v1.33/index.html")).unwrap();
@@ -1867,6 +2007,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1882,7 +2024,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
         r.description = "A **bold** description with `code`.".into();
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1900,7 +2042,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
         r.fields = vec![model_field("name", "A **required** field with `type`.")];
-        render(&[r], &[], dir.path(), "https://example.com", true).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", true, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
@@ -1976,6 +2118,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             true,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
@@ -2062,6 +2206,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -2087,6 +2233,8 @@ mod tests {
             dir.path(),
             "https://example.com",
             false,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let html =
@@ -2109,7 +2257,7 @@ mod tests {
                 "string".into(),
             ))),
         }];
-        render(&[r], &[], dir.path(), "https://example.com", false).unwrap();
+        render(&[r], &[], dir.path(), "https://example.com", false, &std::collections::HashMap::new(), &std::collections::HashMap::new()).unwrap();
         let html =
             std::fs::read_to_string(dir.path().join("docs/v1.33/core/v1/pod/index.html")).unwrap();
         assert!(

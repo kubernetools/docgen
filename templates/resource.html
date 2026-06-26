@@ -15,8 +15,21 @@
   {% elif kind_value is not none and field.name == "kind" %}
   <dt>kind: <code>{{ kind_value }}</code></dt>
   {% else %}
-  <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}{{ field.type_prefix }}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_prefix }}{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %})</span></dt>
-  <dd>{{ field.description | safe if field.description else copy.msg_no_description }}</dd>
+  <dt{% if field.required %} class="req"{% endif %}>{{ field.name }} <span class="type">({% if field.type_href %}{{ field.type_prefix }}<a href="{{ field.type_href | safe }}" aria-label="{{ field.type_prefix }}{{ field.type_display }} type reference">{{ field.type_display }}</a>{% else %}{{ field.type_display }}{% endif %}{% if field.type_classification %} <span class="ref-cls ref-cls--{{ field.type_classification }}">{{ field.type_classification }}</span>{% endif %})</span></dt>
+  <dd>
+    {{ field.description | safe if field.description else copy.msg_no_description }}
+    {% if field.type_description %}
+    <p class="type-desc"><em>{{ field.type_description | safe }}</em></p>
+    {% endif %}
+    {% if field.sub_fields %}
+    <dl class="sub-fields">
+      {% for sf in field.sub_fields %}
+      <dt{% if sf.required %} class="req"{% endif %}>{{ sf.name }} <span class="type">({{ sf.type_prefix }}{{ sf.type_display }})</span></dt>
+      <dd>{{ sf.description | safe if sf.description else copy.msg_no_description }}</dd>
+      {% endfor %}
+    </dl>
+    {% endif %}
+  </dd>
   {% endif %}
   {% endfor %}
 </dl>

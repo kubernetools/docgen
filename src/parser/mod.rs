@@ -5,7 +5,7 @@ use crate::model::{CommonDefinition, Field, Resource};
 use anyhow::{Context, Result};
 use schema::RawSpec;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Common Kubernetes type definitions shared across many resources, as listed on
 /// https://web.archive.org/web/20240227200353/https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/
@@ -32,6 +32,7 @@ const COMMON_DEF_NAMES: &[&str] = &[
     "ResourceFieldSelector",
     "ResourceRequirements",
     "Status",
+    "Time",
     "Toleration",
     "TypedLocalObjectReference",
     "TypedObjectReference",
@@ -43,12 +44,14 @@ struct ParseState<'a> {
     referenced_common: &'a mut HashSet<String>,
     resources: &'a mut Vec<Resource>,
     common_defs: &'a mut Vec<CommonDefinition>,
+    classifications: &'a mut HashMap<String, bool>,
+    simple_type_data: &'a mut HashMap<String, (String, Vec<Field>)>,
 }
 
 pub fn parse_specs(
     specs: Vec<(String, Value)>,
     k8s_version: &str,
-) -> Result<(Vec<Resource>, Vec<CommonDefinition>)> {
+) -> Result<(Vec<Resource>, Vec<CommonDefinition>, HashMap<String, bool>, HashMap<String, (String, Vec<Field>)>)> {
     let mut resources = Vec::new();
     let mut common_defs = Vec::new();
     // Track which schema names have already produced a resource.  Each schema
@@ -58,6 +61,8 @@ pub fn parse_specs(
     let mut emitted: HashSet<String> = HashSet::new();
     let mut emitted_common: HashSet<String> = HashSet::new();
     let mut referenced_common: HashSet<String> = HashSet::new();
+    let mut classifications: HashMap<String, bool> = HashMap::new();
+    let mut simple_type_data: HashMap<String, (String, Vec<Field>)> = HashMap::new();
 
     for (filename, value) in specs {
         // Only process versioned group files: api__v1 or apis__<group>__<version>.
@@ -77,6 +82,8 @@ pub fn parse_specs(
                 referenced_common: &mut referenced_common,
                 resources: &mut resources,
                 common_defs: &mut common_defs,
+                classifications: &mut classifications,
+                simple_type_data: &mut simple_type_data,
             },
         );
     }
@@ -104,7 +111,7 @@ pub fn parse_specs(
 
     roots.sort_by(|a, b| a.kind.cmp(&b.kind));
     common_defs.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok((roots, common_defs))
+    Ok((roots, common_defs, classifications, simple_type_data))
 }
 
 /// Derives (group, version) from a spec filename.
@@ -212,7 +219,7 @@ mod tests {
     #[test]
     fn list_is_attached_to_root_and_removed() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec("", "v1"))];
-        let (resources, _) = parse_specs(specs, "v1.33").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.33").unwrap();
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0].kind, "Pod");
         assert_eq!(resources[0].list_description, "PodList is a list of Pods.");
@@ -228,7 +235,7 @@ mod tests {
                 delete_options_spec("apps", "v1"),
             ),
         ];
-        let (resources, _) = parse_specs(specs, "v1.33").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.33").unwrap();
         // DeleteOptions appears in both files under the same schema name;
         // only the first file's GVK entry should be used.
         assert_eq!(resources.len(), 1);
@@ -253,7 +260,7 @@ mod tests {
                 }}
             }),
         )];
-        let (resources, _) = parse_specs(specs, "v1.33").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.33").unwrap();
         let kinds: Vec<&str> = resources.iter().map(|r| r.kind.as_str()).collect();
         assert_eq!(kinds, ["Pod", "Service"]);
     }
@@ -295,7 +302,7 @@ mod tests {
     #[test]
     fn spec_fields_are_extracted_from_sub_schema() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec_with_sub_schemas())];
-        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         assert_eq!(pod.spec_description, "PodSpec is a description of a pod.");
         assert_eq!(pod.spec_fields.len(), 2);
@@ -307,7 +314,7 @@ mod tests {
     #[test]
     fn status_fields_are_extracted_from_sub_schema() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec_with_sub_schemas())];
-        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         assert_eq!(
             pod.status_description,
@@ -322,7 +329,7 @@ mod tests {
     #[test]
     fn spec_required_is_propagated_from_sub_schema() {
         let specs = vec![("api__v1_openapi.json".into(), pod_spec_with_sub_schemas())];
-        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         let node_name = pod
             .spec_fields
@@ -342,7 +349,7 @@ mod tests {
     fn spec_fields_empty_when_sub_schema_absent() {
         // pod_spec() references PodSpec via $ref but does not include its schema.
         let specs = vec![("api__v1_openapi.json".into(), pod_spec("", "v1"))];
-        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.36").unwrap();
         let pod = resources.iter().find(|r| r.kind == "Pod").unwrap();
         assert!(pod.spec_fields.is_empty());
         assert!(pod.spec_description.is_empty());
@@ -368,7 +375,7 @@ mod tests {
                 }
             }),
         )];
-        let (resources, _) = parse_specs(specs, "v1.36").unwrap();
+        let (resources, _, _, _) = parse_specs(specs, "v1.36").unwrap();
         let cm = resources.iter().find(|r| r.kind == "ConfigMap").unwrap();
         assert!(cm.spec_fields.is_empty());
         assert!(cm.status_fields.is_empty());
@@ -397,7 +404,7 @@ mod tests {
     #[test]
     fn common_def_extracted_when_referenced_by_resource() {
         let specs = vec![("api__v1_openapi.json".into(), pod_with_objectmeta_spec())];
-        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        let (_, common_defs, _, _) = parse_specs(specs, "v1.33").unwrap();
         assert_eq!(common_defs.len(), 1);
         assert_eq!(common_defs[0].name, "ObjectMeta");
         assert_eq!(
@@ -424,7 +431,7 @@ mod tests {
                 }}
             }),
         )];
-        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        let (_, common_defs, _, _) = parse_specs(specs, "v1.33").unwrap();
         assert!(
             common_defs.is_empty(),
             "unreferenced common def must not be included"
@@ -438,7 +445,7 @@ mod tests {
             ("api__v1_openapi.json".into(), spec.clone()),
             ("apis__apps__v1_openapi.json".into(), spec),
         ];
-        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        let (_, common_defs, _, _) = parse_specs(specs, "v1.33").unwrap();
         assert_eq!(
             common_defs
                 .iter()
@@ -471,7 +478,7 @@ mod tests {
                 }}
             }),
         )];
-        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        let (_, common_defs, _, _) = parse_specs(specs, "v1.33").unwrap();
         assert_eq!(common_defs.len(), 1);
         assert_eq!(common_defs[0].name, "LocalObjectReference");
     }
@@ -500,7 +507,7 @@ mod tests {
                 }}
             }),
         )];
-        let (_, common_defs) = parse_specs(specs, "v1.33").unwrap();
+        let (_, common_defs, _, _) = parse_specs(specs, "v1.33").unwrap();
         let names: Vec<&str> = common_defs.iter().map(|cd| cd.name.as_str()).collect();
         assert_eq!(names, ["LabelSelector", "ObjectMeta"]);
     }
@@ -519,6 +526,8 @@ fn parse_spec_file(
         referenced_common,
         resources: out,
         common_defs,
+        classifications,
+        simple_type_data,
     } = state;
     let Some(schemas) = spec.components.and_then(|c| c.schemas) else {
         return;
@@ -529,6 +538,47 @@ fn parse_spec_file(
         .iter()
         .map(|(full_name, s)| (resolve::short_name(full_name), s))
         .collect();
+
+    // Classify each schema and collect data for simple types (first occurrence wins).
+    for (full_name, schema) in &schemas {
+        let short = resolve::short_name(full_name);
+        let is_complex = *classifications.entry(short.clone()).or_insert_with(|| {
+            schema
+                .properties
+                .as_ref()
+                .map(|props| props.values().any(|p| prop_has_ref(p)))
+                .unwrap_or(false)
+        });
+        if !is_complex {
+            simple_type_data.entry(short).or_insert_with(|| {
+                let description = schema.description.clone().unwrap_or_default();
+                let required_set: HashSet<String> = schema
+                    .required
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .cloned()
+                    .collect();
+                let mut fields: Vec<Field> = schema
+                    .properties
+                    .as_ref()
+                    .map(|props| {
+                        props
+                            .iter()
+                            .map(|(name, prop)| Field {
+                                name: name.clone(),
+                                description: prop.description.clone().unwrap_or_default(),
+                                required: required_set.contains(name),
+                                field_type: resolve::resolve_field_type(prop),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                fields.sort_by(|a, b| a.name.cmp(&b.name));
+                (description, fields)
+            });
+        }
+    }
 
     for (schema_name, schema) in &schemas {
         // If another file has already emitted a resource for this schema, skip.
@@ -717,6 +767,28 @@ fn sub_schema_fields(
         .unwrap_or_default();
     fields.sort_by(|a, b| a.name.cmp(&b.name));
     (ref_short, description, fields)
+}
+
+/// Returns true if `prop`, after unwrapping Array/Map, resolves to a `$ref`.
+/// Used to determine whether a schema is "complex" (has at least one composite field).
+fn prop_has_ref(prop: &schema::RawProperty) -> bool {
+    if prop.ref_.is_some() {
+        return true;
+    }
+    if let Some(all_of) = &prop.all_of {
+        if all_of.iter().any(|r| r.ref_.is_some()) {
+            return true;
+        }
+    }
+    if prop.ty.as_deref() == Some("array") {
+        if let Some(items) = &prop.items {
+            return prop_has_ref(items);
+        }
+    }
+    if let Some(add_props) = &prop.additional_properties {
+        return prop_has_ref(add_props);
+    }
+    false
 }
 
 fn prop_ref_short_name(prop: &schema::RawProperty) -> Option<String> {
