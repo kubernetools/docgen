@@ -16,8 +16,10 @@ pub struct Resource {
     pub fields: Vec<Field>,
     pub list_description: String,
     pub list_fields: Vec<Field>,
+    pub spec_name: String,
     pub spec_description: String,
     pub spec_fields: Vec<Field>,
+    pub status_name: String,
     pub status_description: String,
     pub status_fields: Vec<Field>,
 }

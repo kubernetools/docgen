@@ -568,8 +568,9 @@ fn parse_spec_file(
             .unwrap_or_default();
         fields.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let (spec_description, spec_fields) = sub_schema_fields("spec", schema, &by_short_name);
-        let (status_description, status_fields) =
+        let (spec_name, spec_description, spec_fields) =
+            sub_schema_fields("spec", schema, &by_short_name);
+        let (status_name, status_description, status_fields) =
             sub_schema_fields("status", schema, &by_short_name);
 
         collect_common_def_refs(&fields, referenced_common);
@@ -588,8 +589,10 @@ fn parse_spec_file(
             fields,
             list_description: String::new(),
             list_fields: Vec::new(),
+            spec_name,
             spec_description,
             spec_fields,
+            status_name,
             status_description,
             status_fields,
         });
@@ -666,18 +669,18 @@ fn sub_schema_fields(
     field_name: &str,
     schema: &schema::RawSchema,
     by_short_name: &std::collections::HashMap<String, &schema::RawSchema>,
-) -> (String, Vec<Field>) {
+) -> (String, String, Vec<Field>) {
     let Some(props) = schema.properties.as_ref() else {
-        return (String::new(), Vec::new());
+        return (String::new(), String::new(), Vec::new());
     };
     let Some(prop) = props.get(field_name) else {
-        return (String::new(), Vec::new());
+        return (String::new(), String::new(), Vec::new());
     };
     let Some(ref_short) = prop_ref_short_name(prop) else {
-        return (String::new(), Vec::new());
+        return (String::new(), String::new(), Vec::new());
     };
     let Some(sub) = by_short_name.get(&ref_short) else {
-        return (String::new(), Vec::new());
+        return (String::new(), String::new(), Vec::new());
     };
 
     let description = sub.description.clone().unwrap_or_default();
@@ -703,7 +706,7 @@ fn sub_schema_fields(
         })
         .unwrap_or_default();
     fields.sort_by(|a, b| a.name.cmp(&b.name));
-    (description, fields)
+    (ref_short, description, fields)
 }
 
 fn prop_ref_short_name(prop: &schema::RawProperty) -> Option<String> {
