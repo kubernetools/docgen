@@ -2,9 +2,9 @@ mod copy;
 mod pages;
 mod sitemap;
 
-use crate::model::{CommonDefinition, FieldType, Resource};
 use anyhow::Result;
 use copy::UiCopy;
+use docgen::model::{CommonDefinition, FieldType, Resource};
 use minijinja::Environment;
 use pages::*;
 use pulldown_cmark::{html as cm_html, Options, Parser};
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-type TypeData = std::collections::HashMap<String, (String, Vec<crate::model::Field>)>;
+type TypeData = std::collections::HashMap<String, (String, Vec<docgen::model::Field>)>;
 
 pub struct TypeMaps<'a> {
     pub classifications: &'a std::collections::HashMap<String, bool>,
@@ -832,11 +832,11 @@ fn find_bare_url_pos(s: &str) -> Option<usize> {
 }
 
 fn build_fields_ctx(
-    fields: &[crate::model::Field],
+    fields: &[docgen::model::Field],
     kind_paths: &std::collections::HashMap<String, String>,
     common_def_paths: &std::collections::HashMap<String, String>,
     classifications: &std::collections::HashMap<String, bool>,
-    simple_types: &std::collections::HashMap<String, (String, Vec<crate::model::Field>)>,
+    simple_types: &std::collections::HashMap<String, (String, Vec<docgen::model::Field>)>,
 ) -> Vec<FieldCtx> {
     fields
         .iter()
@@ -933,11 +933,11 @@ fn build_fields_ctx(
 /// duplicates within a page.
 fn collect_type_sections(
     fields: &[FieldCtx],
-    complex_types: &std::collections::HashMap<String, (String, Vec<crate::model::Field>)>,
+    complex_types: &std::collections::HashMap<String, (String, Vec<docgen::model::Field>)>,
     kind_paths: &std::collections::HashMap<String, String>,
     common_def_paths: &std::collections::HashMap<String, String>,
     classifications: &std::collections::HashMap<String, bool>,
-    simple_types: &std::collections::HashMap<String, (String, Vec<crate::model::Field>)>,
+    simple_types: &std::collections::HashMap<String, (String, Vec<docgen::model::Field>)>,
     visited: &mut std::collections::HashSet<String>,
 ) -> Vec<TypeSectionCtx> {
     let mut sections = Vec::new();
@@ -1073,7 +1073,7 @@ mod tests {
 
     #[test]
     fn resource_path_core() {
-        use crate::model::Resource;
+        use docgen::model::Resource;
         let r = Resource {
             kind: "Pod".into(),
             group: "".into(),
@@ -1096,7 +1096,7 @@ mod tests {
 
     #[test]
     fn resource_path_named_group() {
-        use crate::model::Resource;
+        use docgen::model::Resource;
         let r = Resource {
             kind: "Deployment".into(),
             group: "apps".into(),
@@ -1123,8 +1123,8 @@ mod tests {
         );
     }
 
-    fn make_common_def(name: &str) -> crate::model::CommonDefinition {
-        crate::model::CommonDefinition {
+    fn make_common_def(name: &str) -> docgen::model::CommonDefinition {
+        docgen::model::CommonDefinition {
             name: name.into(),
             description: format!("{name} is a common definition."),
             fields: vec![],
@@ -1132,8 +1132,8 @@ mod tests {
         }
     }
 
-    fn make_resource(kind: &str) -> crate::model::Resource {
-        crate::model::Resource {
+    fn make_resource(kind: &str) -> docgen::model::Resource {
+        docgen::model::Resource {
             kind: kind.into(),
             group: "".into(),
             api_version: "v1".into(),
@@ -1151,12 +1151,12 @@ mod tests {
         }
     }
 
-    fn model_field(name: &str, description: &str) -> crate::model::Field {
-        crate::model::Field {
+    fn model_field(name: &str, description: &str) -> docgen::model::Field {
+        docgen::model::Field {
             name: name.into(),
             description: description.into(),
             required: false,
-            field_type: crate::model::FieldType::Scalar("string".into()),
+            field_type: docgen::model::FieldType::Scalar("string".into()),
         }
     }
 
@@ -1705,7 +1705,7 @@ mod tests {
     #[test]
     fn apiversion_field_named_group_shows_group_slash_version() {
         let dir = tempfile::tempdir().unwrap();
-        let r = crate::model::Resource {
+        let r = docgen::model::Resource {
             kind: "Deployment".into(),
             group: "apps".into(),
             api_version: "v1".into(),
@@ -1819,12 +1819,12 @@ mod tests {
         );
     }
 
-    fn ref_field(name: &str, ref_type: &str, description: &str) -> crate::model::Field {
-        crate::model::Field {
+    fn ref_field(name: &str, ref_type: &str, description: &str) -> docgen::model::Field {
+        docgen::model::Field {
             name: name.into(),
             description: description.into(),
             required: false,
-            field_type: crate::model::FieldType::Ref(ref_type.into()),
+            field_type: docgen::model::FieldType::Ref(ref_type.into()),
         }
     }
 
@@ -2301,11 +2301,11 @@ mod tests {
     fn resource_field_ref_to_common_def_gets_href() {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
-        r.fields = vec![crate::model::Field {
+        r.fields = vec![docgen::model::Field {
             name: "metadata".into(),
             description: "Standard object metadata.".into(),
             required: false,
-            field_type: crate::model::FieldType::Ref("ObjectMeta".into()),
+            field_type: docgen::model::FieldType::Ref("ObjectMeta".into()),
         }];
         render(
             &[r],
@@ -2579,23 +2579,23 @@ mod tests {
 
     // render tests — only the ref name is linked, prefix is plain text
 
-    fn map_ref_field(name: &str, ref_type: &str) -> crate::model::Field {
-        crate::model::Field {
+    fn map_ref_field(name: &str, ref_type: &str) -> docgen::model::Field {
+        docgen::model::Field {
             name: name.into(),
             description: String::new(),
             required: false,
-            field_type: crate::model::FieldType::Map(Box::new(crate::model::FieldType::Ref(
+            field_type: docgen::model::FieldType::Map(Box::new(docgen::model::FieldType::Ref(
                 ref_type.into(),
             ))),
         }
     }
 
-    fn array_ref_field(name: &str, ref_type: &str) -> crate::model::Field {
-        crate::model::Field {
+    fn array_ref_field(name: &str, ref_type: &str) -> docgen::model::Field {
+        docgen::model::Field {
             name: name.into(),
             description: String::new(),
             required: false,
-            field_type: crate::model::FieldType::Array(Box::new(crate::model::FieldType::Ref(
+            field_type: docgen::model::FieldType::Array(Box::new(docgen::model::FieldType::Ref(
                 ref_type.into(),
             ))),
         }
@@ -2661,11 +2661,11 @@ mod tests {
     fn map_of_scalar_field_has_no_link() {
         let dir = tempfile::tempdir().unwrap();
         let mut r = make_resource("Pod");
-        r.fields = vec![crate::model::Field {
+        r.fields = vec![docgen::model::Field {
             name: "labels".into(),
             description: String::new(),
             required: false,
-            field_type: crate::model::FieldType::Map(Box::new(crate::model::FieldType::Scalar(
+            field_type: docgen::model::FieldType::Map(Box::new(docgen::model::FieldType::Scalar(
                 "string".into(),
             ))),
         }];

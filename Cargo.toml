@@ -3,6 +3,14 @@ name = "docgen"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "docgen"
+path = "src/main.rs"
+
+[[bin]]
+name = "mcp"
+path = "src/bin/mcp.rs"
+
 [dev-dependencies]
 tempfile = "3"
 
@@ -15,3 +23,8 @@ serde_json = "1"
 minijinja = "2"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 anyhow    = "1"
+rmcp      = { version = "1", features = ["server", "transport-streamable-http-server"] }
+axum      = { version = "0.8" }
+governor  = { version = "0.10" }
+tracing   = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

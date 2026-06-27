@@ -1,12 +1,10 @@
 mod cli;
-mod fetcher;
-mod model;
-mod parser;
 mod renderer;
 
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
+use docgen::{fetcher, parser};
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -323,3 +323,113 @@ live in `src/renderer/copy.rs`, not be hardcoded in `renderer/mod.rs` or templat
 | Common defs index    | `{out}/docs/{k8s_version}/common-definitions/index.html`                |
 | Common def page      | `{out}/docs/{k8s_version}/common-definitions/{name_lower}/index.html`   |
 | Sitemap              | `{out}/sitemap.xml`                                                     |
+
+---
+
+## MCP server (`src/bin/mcp.rs`)
+
+A second binary, `mcp`, serves the parsed Kubernetes API specs via the
+[Model Context Protocol](https://modelcontextprotocol.io/) over Streamable HTTP.
+It is built from the same crate; `src/lib.rs` re-exports the three shared
+modules so both binaries can use them:
+
+```
+src/lib.rs       pub mod fetcher; pub mod model; pub mod parser;
+src/bin/mcp.rs   MCP server entry point
+```
+
+`main.rs` and `renderer/` remain bin-only. Because `renderer/mod.rs` uses
+`crate::model`, and `model` is no longer declared in `main.rs`, all references
+inside the renderer use `docgen::model::` (the lib crate name) — not `crate::`.
+
+### Build & run
+
+```bash
+# Minimal key store required:
+echo '[{"key":"mykey","tier":"free"}]' > keys.json
+
+cargo run --release --bin mcp -- \
+  --k8s-versions v1.33,v1.34,v1.35,v1.36 \
+  --key-store keys.json
+# RUST_LOG=info  (default)
+# GITHUB_TOKEN=ghp_...  (optional, avoids GitHub rate limits when loading 4+ versions)
+```
+
+### Module map
+
+```
+src/bin/mcp.rs
+  Cli                    clap: --k8s-versions, --token, --port, --key-store
+  Tier                   enum Free | Paid
+  KeyStore               Arc<HashMap<String, Tier>> — loaded from JSON at startup
+  KeyLimiter             Arc<RateLimiter<…, StateInformationMiddleware>>
+  make_limiter()         builds governor keyed rate limiter via RateLimiter::new()
+  mask_key()             masks API key to ***last4 for logs
+  AppState               versions + services + keys + free_limiter + paid_limiter
+  McpHandler             holds Arc<ParseResult>; implements rmcp::ServerHandler
+    list_tools()         returns [list_resources, get_resource, get_type]
+    call_tool()          dispatches to handle_list_resources / _get_resource / _get_type
+  authenticate()         axum middleware — checks Authorization: Bearer, injects Tier
+  rate_limit()           axum middleware — checks governor, logs burst_remaining / retry_after
+  mcp_handler()          axum handler — routes ?version= to the correct StreamableHttpService
+  main()                 init tracing → load keys → spawn fetch+parse per version → build services → serve
+```
+
+### Key dependencies
+
+| Crate | Version | Role |
+|-------|---------|------|
+| `rmcp` | 1 | MCP SDK — `ServerHandler`, `StreamableHttpService`, model types |
+| `axum` | 0.8 | HTTP server and middleware |
+| `governor` | 0.10 | Per-key rate limiting (`RateLimiter::new` with `StateInformationMiddleware`) |
+| `tracing` / `tracing-subscriber` | 0.1 / 0.3 | Structured logging; level via `RUST_LOG` |
+
+### Auth and rate limiting
+
+Every request passes through two axum middleware layers (outermost first):
+
+1. **`authenticate`** — extracts `Authorization: Bearer <key>`, looks up the
+   `KeyStore`, injects `Tier` into request extensions, returns 401 on failure.
+2. **`rate_limit`** — reads `Tier` from extensions, calls `limiter.check_key()`.
+   On success logs `burst_remaining` (from `StateInformationMiddleware`'s
+   `StateSnapshot`). On failure logs `retry_after_secs` (from
+   `not_until.wait_time_from(DefaultClock::default().now())`), returns 429.
+
+Limits: free = 10 req/min (burst 10, 1 token per 6 s); paid ≈ unlimited
+(burst 1000, 1 token per 1 s). Tracked per API key string.
+
+### Version routing
+
+One `StreamableHttpService<McpHandler, LocalSessionManager>` is created per
+k8s version at startup and stored in `AppState.services`. The `mcp_handler`
+axum handler extracts `?version=` from the URI and delegates to the matching
+service. Clients must include `?version=v1.33` on every request (including the
+SSE GET). Unknown versions return 400; omitted version falls back to the first
+loaded version.
+
+### MCP tools — output types
+
+`get_resource` and `get_type` return `FieldDetail`:
+
+```rust
+struct FieldDetail {
+    name: String,
+    field_type: String,     // "string", "[]Container", "map[string]string", …
+    required: bool,
+    description: String,
+    sub_fields: Vec<FieldDetail>,   // non-empty for simple types (inline expansion)
+    type_ref: Option<String>,       // non-null for complex types → call get_type
+}
+```
+
+`type_ref` and `sub_fields` are mutually exclusive. `field_type_str()` converts
+`FieldType` to a human-readable string; `leaf_ref()` walks `Array`/`Map`
+wrappers to find the inner `Ref` name.
+
+### Logging
+
+Initialised with `tracing_subscriber::fmt().with_env_filter(…).init()`.
+Defaults to `info`; override with `RUST_LOG=debug` for rmcp/axum internals.
+Startup emits one `info` per version (fetching → parsing → ready).
+Each request logs key (masked), version, tier, and `burst_remaining` at INFO,
+or `retry_after_secs` at WARN when rate-limited. Unauthorized attempts log WARN.
