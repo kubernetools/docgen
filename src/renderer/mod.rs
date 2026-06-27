@@ -1426,7 +1426,7 @@ mod tests {
         let resource_html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
         assert!(
-            resource_html.contains(r#"<link rel="canonical" href="/docs/latest/core/v1/pod/">"#),
+            resource_html.contains(r#"<link rel="canonical" href="https://example.com/docs/latest/core/v1/pod/">"#),
             "resource page canonical must point to /docs/latest/"
         );
 
@@ -1434,7 +1434,7 @@ mod tests {
         let group_html =
             std::fs::read_to_string(dir.path().join("docs/latest/core/index.html")).unwrap();
         assert!(
-            group_html.contains(r#"<link rel="canonical" href="/docs/latest/core/">"#),
+            group_html.contains(r#"<link rel="canonical" href="https://example.com/docs/latest/core/">"#),
             "group index canonical must point to /docs/latest/"
         );
 
@@ -1442,7 +1442,7 @@ mod tests {
         let version_html =
             std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
         assert!(
-            version_html.contains(r#"<link rel="canonical" href="/docs/latest/">"#),
+            version_html.contains(r#"<link rel="canonical" href="https://example.com/docs/latest/">"#),
             "version index canonical must point to /docs/latest/"
         );
     }
