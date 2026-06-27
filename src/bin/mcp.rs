@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     num::NonZeroU32,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,7 +12,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     body::Body,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -37,6 +38,7 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
@@ -64,6 +66,10 @@ struct Cli {
     /// Format: [{ "key": "abc123", "tier": "free" }, …]
     #[arg(long, env = "KEY_STORE_PATH")]
     key_store: String,
+    /// Allowed Host header values, comma-separated (e.g. mcp.example.com,mcp.example.com:443).
+    /// When omitted, host validation is disabled (suitable for local development only).
+    #[arg(long, value_delimiter = ',', env = "ALLOWED_HOSTS")]
+    allowed_hosts: Vec<String>,
 }
 
 // ── Auth / rate-limit types ───────────────────────────────────────────────────
@@ -104,6 +110,10 @@ fn mask_key(key: &str) -> String {
     }
 }
 
+fn hash_key(key: &str) -> String {
+    hex::encode(Sha256::digest(key.as_bytes()))
+}
+
 // ── Shared state ──────────────────────────────────────────────────────────────
 
 type VersionMap = Arc<HashMap<String, Arc<ParseResult>>>;
@@ -113,9 +123,10 @@ type McpService = StreamableHttpService<McpHandler, LocalSessionManager>;
 struct AppState {
     versions: VersionMap,
     services: Arc<HashMap<String, McpService>>,
-    _keys: KeyStore,
+    keys: KeyStore,
     free_limiter: KeyLimiter,
     paid_limiter: KeyLimiter,
+    auth_limiter: KeyLimiter,
     ready: Arc<AtomicBool>,
 }
 
@@ -490,17 +501,24 @@ fn query_version(query: &str) -> Option<&str> {
 // ── Axum middleware ───────────────────────────────────────────────────────────
 
 async fn authenticate(
-    State(keys): State<KeyStore>,
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
+    let ip = addr.ip().to_string();
+    if state.auth_limiter.check_key(&ip).is_err() {
+        warn!(ip = %ip, "auth rate limited");
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
     let token = req
         .headers()
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
 
-    match token.and_then(|t| keys.get(t)) {
+    match token.and_then(|t| state.keys.get(&hash_key(t))) {
         Some(tier) => {
             req.extensions_mut().insert(tier.clone());
             next.run(req).await
@@ -626,7 +644,7 @@ async fn main() -> Result<()> {
             } else {
                 Tier::Free
             };
-            (e.key, tier)
+            (hash_key(&e.key), tier)
         })
         .collect();
     let keys = Arc::new(keys);
@@ -661,7 +679,12 @@ async fn main() -> Result<()> {
     ready.store(true, Ordering::Relaxed);
 
     // Build one StreamableHttpService per k8s version
-    let mcp_config = StreamableHttpServerConfig::default().disable_allowed_hosts();
+    // Default allows localhost/127.0.0.1/::1 only; --allowed-hosts overrides for production.
+    let mcp_config = if cli.allowed_hosts.is_empty() {
+        StreamableHttpServerConfig::default()
+    } else {
+        StreamableHttpServerConfig::default().with_allowed_hosts(cli.allowed_hosts.clone())
+    };
     let mut service_map: HashMap<String, McpService> = HashMap::new();
     for (version, parsed) in versions.iter() {
         let p = parsed.clone();
@@ -675,22 +698,25 @@ async fn main() -> Result<()> {
 
     // Rate limiters: free = 10 req/min (1 token per 6 s, burst 10)
     //                paid = effectively unlimited (100 req/s, burst 1000)
+    //                auth = 20 req/min per source IP (burst 20, 1 token per 3 s)
     let free_limiter = make_limiter(10, 6);
     let paid_limiter = make_limiter(1000, 1);
+    let auth_limiter = make_limiter(20, 3);
 
     let state = AppState {
         versions,
         services: Arc::new(service_map),
-        _keys: keys.clone(),
+        keys,
         free_limiter,
         paid_limiter,
+        auth_limiter,
         ready,
     };
 
     let protected = Router::new()
         .route("/mcp", routing::any(mcp_handler))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
-        .layer(middleware::from_fn_with_state(keys, authenticate));
+        .layer(middleware::from_fn_with_state(state.clone(), authenticate));
 
     let app = Router::new()
         .route("/healthz", routing::get(healthz))
@@ -699,7 +725,11 @@ async fn main() -> Result<()> {
 
     let listener = TcpListener::bind(("0.0.0.0", cli.port)).await?;
     info!(port = cli.port, "listening");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -786,6 +816,32 @@ mod tests {
         assert_eq!(mask_key("mysecretkey"), "***tkey");
     }
 
+    // ── hash_key ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn hash_key_known_digest() {
+        // SHA-256("mykey") verified externally
+        assert_eq!(
+            hash_key("mykey"),
+            "5e50f405ace6cbdf17379f4b9f2b0c9f4144c5e380ea0b9298cb02ebd8ffe511"
+        );
+    }
+
+    #[test]
+    fn hash_key_different_inputs_differ() {
+        assert_ne!(hash_key("key1"), hash_key("key2"));
+    }
+
+    #[test]
+    fn hash_key_lookup_matches() {
+        let raw = "secret-api-key";
+        let mut store: HashMap<String, Tier> = HashMap::new();
+        store.insert(hash_key(raw), Tier::Free);
+
+        assert_eq!(store.get(&hash_key(raw)), Some(&Tier::Free));
+        assert_eq!(store.get(&hash_key("wrong-key")), None);
+    }
+
     // ── healthz ───────────────────────────────────────────────────────────────
 
     fn state_with_ready(ready: bool) -> AppState {
@@ -793,9 +849,10 @@ mod tests {
         AppState {
             versions: Arc::new(HashMap::new()),
             services: Arc::new(HashMap::new()),
-            _keys: Arc::new(HashMap::new()),
+            keys: Arc::new(HashMap::new()),
             free_limiter: make_limiter(10, 6),
             paid_limiter: make_limiter(1000, 1),
+            auth_limiter: make_limiter(20, 3),
             ready: flag,
         }
     }

@@ -28,3 +28,5 @@ axum      = { version = "0.8" }
 governor  = { version = "0.10" }
 tracing   = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sha2      = "0.10"
+hex       = "0.4"
