@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ copy.site_name }} | {{ copy.site_tagline }}{% endblock %}</title>
   <meta name="description" content="{% block meta_description %}{{ copy.default_meta_description }}{% endblock %}">
-  <link rel="canonical" href="{{ canonical_path | safe }}">
+  <link rel="canonical" href="{{ canonical_url | safe }}">
   <link rel="stylesheet" href="/docs/style.css">
   <script type="application/ld+json">{% block jsonld %}{}{% endblock %}</script>
 </head>
