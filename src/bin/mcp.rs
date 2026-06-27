@@ -1,4 +1,12 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    num::NonZeroU32,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::Result;
 use axum::{
@@ -41,7 +49,12 @@ use docgen::{fetcher, parser};
 #[derive(Parser)]
 struct Cli {
     /// Kubernetes versions to pre-load, comma-separated (e.g. v1.31,v1.32,v1.33)
-    #[arg(long, value_delimiter = ',', default_value = "v1.33")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "v1.33",
+        env = "K8S_VERSIONS"
+    )]
     k8s_versions: Vec<String>,
     #[arg(long, env = "GITHUB_TOKEN")]
     token: Option<String>,
@@ -103,6 +116,7 @@ struct AppState {
     _keys: KeyStore,
     free_limiter: KeyLimiter,
     paid_limiter: KeyLimiter,
+    ready: Arc<AtomicBool>,
 }
 
 // ── Tool response types ───────────────────────────────────────────────────────
@@ -553,6 +567,16 @@ async fn rate_limit(State(state): State<AppState>, req: Request<Body>, next: Nex
     }
 }
 
+// ── Health probe ─────────────────────────────────────────────────────────────
+
+async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
+    if state.ready.load(Ordering::Relaxed) {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "loading")
+    }
+}
+
 // ── Version routing ───────────────────────────────────────────────────────────
 
 async fn mcp_handler(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
@@ -607,6 +631,8 @@ async fn main() -> Result<()> {
         .collect();
     let keys = Arc::new(keys);
 
+    let ready = Arc::new(AtomicBool::new(false));
+
     // Fetch and parse all requested k8s versions concurrently
     let mut handles = Vec::new();
     for version in cli.k8s_versions.clone() {
@@ -632,6 +658,7 @@ async fn main() -> Result<()> {
         version_map.insert(version, parsed);
     }
     let versions: VersionMap = Arc::new(version_map);
+    ready.store(true, Ordering::Relaxed);
 
     // Build one StreamableHttpService per k8s version
     let mcp_config = StreamableHttpServerConfig::default().disable_allowed_hosts();
@@ -657,12 +684,17 @@ async fn main() -> Result<()> {
         _keys: keys.clone(),
         free_limiter,
         paid_limiter,
+        ready,
     };
 
-    let app = Router::new()
+    let protected = Router::new()
         .route("/mcp", routing::any(mcp_handler))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
-        .layer(middleware::from_fn_with_state(keys, authenticate))
+        .layer(middleware::from_fn_with_state(keys, authenticate));
+
+    let app = Router::new()
+        .route("/healthz", routing::get(healthz))
+        .merge(protected)
         .with_state(state);
 
     let listener = TcpListener::bind(("0.0.0.0", cli.port)).await?;
@@ -752,6 +784,34 @@ mod tests {
     fn mask_key_long() {
         assert_eq!(mask_key("abcde"), "***bcde");
         assert_eq!(mask_key("mysecretkey"), "***tkey");
+    }
+
+    // ── healthz ───────────────────────────────────────────────────────────────
+
+    fn state_with_ready(ready: bool) -> AppState {
+        let flag = Arc::new(AtomicBool::new(ready));
+        AppState {
+            versions: Arc::new(HashMap::new()),
+            services: Arc::new(HashMap::new()),
+            _keys: Arc::new(HashMap::new()),
+            free_limiter: make_limiter(10, 6),
+            paid_limiter: make_limiter(1000, 1),
+            ready: flag,
+        }
+    }
+
+    #[tokio::test]
+    async fn healthz_returns_ok_when_ready() {
+        let state = State(state_with_ready(true));
+        let resp = healthz(state).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn healthz_returns_503_when_not_ready() {
+        let state = State(state_with_ready(false));
+        let resp = healthz(state).await.into_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     // ── display_group ─────────────────────────────────────────────────────────

@@ -37,12 +37,16 @@ jobs:
         run: sudo apt-get install -y musl-tools
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --bin docgen --bin mcp --target ${{ matrix.target }}
 
-      - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/docgen docgen-${{ github.ref_name }}-${{ matrix.suffix }}
+      - name: Rename binaries
+        run: |
+          cp target/${{ matrix.target }}/release/docgen docgen-${{ github.ref_name }}-${{ matrix.suffix }}
+          cp target/${{ matrix.target }}/release/mcp mcp-${{ github.ref_name }}-${{ matrix.suffix }}
 
       - name: Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
         with:
-          files: docgen-${{ github.ref_name }}-${{ matrix.suffix }}
+          files: |
+            docgen-${{ github.ref_name }}-${{ matrix.suffix }}
+            mcp-${{ github.ref_name }}-${{ matrix.suffix }}

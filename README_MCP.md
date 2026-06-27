@@ -254,6 +254,40 @@ list_resources                          → discover kind names and groups
        └─ get_type(type_name="...")    → drill into any complex type_ref
 ```
 
+## Health probe
+
+```
+GET /healthz
+```
+
+Returns `200 OK` with body `ok` once all Kubernetes versions have finished
+loading. Returns `503 Service Unavailable` with body `loading` while startup
+is still in progress.
+
+This endpoint bypasses authentication and rate limiting so Kubernetes can poll
+it freely during startup.
+
+Use it for both the **startup probe** (wait until ready) and the **readiness
+probe** (stop traffic if the pod restarts):
+
+```yaml
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: 3000
+  failureThreshold: 30   # allow up to 5 min for version loading
+  periodSeconds: 10
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 3000
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 3000
+  initialDelaySeconds: 10
+```
+
 ## Error responses
 
 | HTTP status | Cause |
