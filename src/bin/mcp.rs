@@ -64,8 +64,10 @@ struct Cli {
     port: u16,
     /// Path to a JSON file mapping API keys to tiers.
     /// Format: [{ "key": "abc123", "tier": "free" }, …]
+    /// When omitted, the server runs in anonymous mode: no auth required,
+    /// all connections rate-limited per source IP at the free-tier limit.
     #[arg(long, env = "KEY_STORE_PATH")]
-    key_store: String,
+    key_store: Option<String>,
     /// Allowed Host header values, comma-separated (e.g. mcp.example.com,mcp.example.com:443).
     /// When omitted, host validation is disabled (suitable for local development only).
     #[arg(long, value_delimiter = ',', env = "ALLOWED_HOSTS")]
@@ -128,6 +130,7 @@ struct AppState {
     paid_limiter: KeyLimiter,
     auth_limiter: KeyLimiter,
     ready: Arc<AtomicBool>,
+    anon_mode: bool,
 }
 
 // ── Tool response types ───────────────────────────────────────────────────────
@@ -506,6 +509,11 @@ async fn authenticate(
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
+    if state.anon_mode {
+        req.extensions_mut().insert(Tier::Free);
+        return next.run(req).await;
+    }
+
     let ip = addr.ip().to_string();
     if state.auth_limiter.check_key(&ip).is_err() {
         warn!(ip = %ip, "auth rate limited");
@@ -531,20 +539,33 @@ async fn authenticate(
     }
 }
 
-async fn rate_limit(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+async fn rate_limit(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let tier = req
         .extensions()
         .get::<Tier>()
         .cloned()
         .unwrap_or(Tier::Free);
-    let raw_key = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("")
-        .to_string();
-    let masked = mask_key(&raw_key);
+
+    let (rate_key, identity) = if state.anon_mode {
+        let ip = addr.ip().to_string();
+        (ip.clone(), ip)
+    } else {
+        let raw_key = req
+            .headers()
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("")
+            .to_string();
+        let masked = mask_key(&raw_key);
+        (raw_key, masked)
+    };
+
     let version = req
         .uri()
         .query()
@@ -560,10 +581,10 @@ async fn rate_limit(State(state): State<AppState>, req: Request<Body>, next: Nex
         Tier::Paid => &state.paid_limiter,
     };
 
-    match limiter.check_key(&raw_key) {
+    match limiter.check_key(&rate_key) {
         Ok(state_snapshot) => {
             info!(
-                key = %masked,
+                identity = %identity,
                 version,
                 tier = tier_label,
                 burst_remaining = state_snapshot.remaining_burst_capacity(),
@@ -574,7 +595,7 @@ async fn rate_limit(State(state): State<AppState>, req: Request<Body>, next: Nex
         Err(not_until) => {
             let retry_after = not_until.wait_time_from(DefaultClock::default().now());
             warn!(
-                key = %masked,
+                identity = %identity,
                 version,
                 tier = tier_label,
                 retry_after_secs = retry_after.as_secs_f32(),
@@ -631,23 +652,28 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Load API key store
-    let key_json = std::fs::read_to_string(&cli.key_store)
-        .map_err(|e| anyhow::anyhow!("cannot read key store '{}': {e}", cli.key_store))?;
-    let entries: Vec<KeyEntry> = serde_json::from_str(&key_json)
-        .map_err(|e| anyhow::anyhow!("invalid key store JSON: {e}"))?;
-    let keys: HashMap<String, Tier> = entries
-        .into_iter()
-        .map(|e| {
-            let tier = if e.tier == "paid" {
-                Tier::Paid
-            } else {
-                Tier::Free
-            };
-            (hash_key(&e.key), tier)
-        })
-        .collect();
-    let keys = Arc::new(keys);
+    // Load API key store, or run in anonymous IP-limited mode if omitted
+    let (keys, anon_mode) = if let Some(path) = &cli.key_store {
+        let key_json = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("cannot read key store '{}': {e}", path))?;
+        let entries: Vec<KeyEntry> = serde_json::from_str(&key_json)
+            .map_err(|e| anyhow::anyhow!("invalid key store JSON: {e}"))?;
+        let keys: HashMap<String, Tier> = entries
+            .into_iter()
+            .map(|e| {
+                let tier = if e.tier == "paid" {
+                    Tier::Paid
+                } else {
+                    Tier::Free
+                };
+                (hash_key(&e.key), tier)
+            })
+            .collect();
+        (Arc::new(keys), false)
+    } else {
+        info!("no key store provided — anonymous mode, rate limiting per source IP");
+        (Arc::new(HashMap::new()), true)
+    };
 
     let ready = Arc::new(AtomicBool::new(false));
 
@@ -711,6 +737,7 @@ async fn main() -> Result<()> {
         paid_limiter,
         auth_limiter,
         ready,
+        anon_mode,
     };
 
     let protected = Router::new()
@@ -854,6 +881,7 @@ mod tests {
             paid_limiter: make_limiter(1000, 1),
             auth_limiter: make_limiter(20, 3),
             ready: flag,
+            anon_mode: false,
         }
     }
 
@@ -1385,5 +1413,209 @@ mod tests {
             complex_types: HashMap::new(),
         });
         assert!(h.handle_get_type(&args(&[])).is_err());
+    }
+}
+
+// ── Middleware tests ──────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod middleware_tests {
+    use super::*;
+    use axum::{body::Body, extract::ConnectInfo, http::Request, routing, Router};
+    use tower::ServiceExt;
+
+    fn anon_state() -> AppState {
+        AppState {
+            versions: Arc::new(HashMap::new()),
+            services: Arc::new(HashMap::new()),
+            keys: Arc::new(HashMap::new()),
+            free_limiter: make_limiter(10, 6),
+            paid_limiter: make_limiter(1000, 1),
+            auth_limiter: make_limiter(20, 3),
+            ready: Arc::new(AtomicBool::new(true)),
+            anon_mode: true,
+        }
+    }
+
+    fn auth_state(keys: HashMap<String, Tier>) -> AppState {
+        AppState {
+            versions: Arc::new(HashMap::new()),
+            services: Arc::new(HashMap::new()),
+            keys: Arc::new(keys),
+            free_limiter: make_limiter(10, 6),
+            paid_limiter: make_limiter(1000, 1),
+            auth_limiter: make_limiter(20, 3),
+            ready: Arc::new(AtomicBool::new(true)),
+            anon_mode: false,
+        }
+    }
+
+    fn req_from(ip: [u8; 4]) -> Request<Body> {
+        let mut r = Request::builder().uri("/mcp").body(Body::empty()).unwrap();
+        r.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((ip, 1234))));
+        r
+    }
+
+    fn req_with_bearer(ip: [u8; 4], token: &str) -> Request<Body> {
+        let mut r = Request::builder()
+            .uri("/mcp")
+            .header("Authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        r.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((ip, 1234))));
+        r
+    }
+
+    fn auth_router(state: AppState) -> Router {
+        Router::new()
+            .route("/mcp", routing::get(|| async { StatusCode::OK }))
+            .layer(middleware::from_fn_with_state(state.clone(), authenticate))
+            .with_state(state)
+    }
+
+    fn rate_router(state: AppState) -> Router {
+        // Pre-inject Tier::Free so rate_limit doesn't need authenticate upstream
+        Router::new()
+            .route(
+                "/mcp",
+                routing::get(|| async { StatusCode::OK }).layer(middleware::from_fn(
+                    |mut req: Request<Body>, next: Next| async move {
+                        req.extensions_mut().insert(Tier::Free);
+                        next.run(req).await
+                    },
+                )),
+            )
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
+            .with_state(state)
+    }
+
+    // ── authenticate: anon mode ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn authenticate_anon_no_token_allowed() {
+        let app = auth_router(anon_state());
+        let resp = app.oneshot(req_from([127, 0, 0, 1])).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn authenticate_anon_bad_token_allowed() {
+        let app = auth_router(anon_state());
+        let resp = app
+            .oneshot(req_with_bearer([127, 0, 0, 1], "garbage"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── authenticate: auth mode ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn authenticate_auth_no_token_rejected() {
+        let app = auth_router(auth_state(HashMap::new()));
+        let resp = app.oneshot(req_from([127, 0, 0, 1])).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn authenticate_auth_bad_token_rejected() {
+        let app = auth_router(auth_state(HashMap::new()));
+        let resp = app
+            .oneshot(req_with_bearer([127, 0, 0, 1], "bad-key"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn authenticate_auth_valid_token_allowed() {
+        let raw = "my-secret-key";
+        let mut keys = HashMap::new();
+        keys.insert(hash_key(raw), Tier::Free);
+        let app = auth_router(auth_state(keys));
+        let resp = app
+            .oneshot(req_with_bearer([127, 0, 0, 1], raw))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── rate_limit: anon mode (keyed by IP) ───────────────────────────────────
+
+    #[tokio::test]
+    async fn rate_limit_anon_same_ip_exhausted() {
+        // burst=2 so the third request from the same IP is rejected
+        let state = AppState {
+            free_limiter: make_limiter(2, 60),
+            ..anon_state()
+        };
+
+        for expected in [
+            StatusCode::OK,
+            StatusCode::OK,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            let resp = rate_router(state.clone())
+                .oneshot(req_from([10, 0, 0, 1]))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limit_anon_different_ips_independent() {
+        // burst=1: IP A exhausts its bucket, IP B still gets its first request
+        let state = AppState {
+            free_limiter: make_limiter(1, 60),
+            ..anon_state()
+        };
+
+        let ok = rate_router(state.clone())
+            .oneshot(req_from([10, 0, 0, 1]))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        let exhausted = rate_router(state.clone())
+            .oneshot(req_from([10, 0, 0, 1]))
+            .await
+            .unwrap();
+        assert_eq!(exhausted.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let different_ip = rate_router(state)
+            .oneshot(req_from([10, 0, 0, 2]))
+            .await
+            .unwrap();
+        assert_eq!(different_ip.status(), StatusCode::OK);
+    }
+
+    // ── rate_limit: auth mode (keyed by token, not IP) ───────────────────────
+
+    #[tokio::test]
+    async fn rate_limit_auth_same_key_different_ips_share_bucket() {
+        // burst=1: two requests with the same Bearer token from different IPs
+        // share a bucket — the second is rejected even though it came from a new IP
+        let raw = "shared-key";
+        let mut keys = HashMap::new();
+        keys.insert(hash_key(raw), Tier::Free);
+        let state = AppState {
+            free_limiter: make_limiter(1, 60),
+            ..auth_state(keys)
+        };
+
+        let ok = rate_router(state.clone())
+            .oneshot(req_with_bearer([10, 0, 0, 1], raw))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        let rejected = rate_router(state)
+            .oneshot(req_with_bearer([10, 0, 0, 2], raw))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 }

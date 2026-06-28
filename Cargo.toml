@@ -13,6 +13,7 @@ path = "src/bin/mcp.rs"
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
 
 [dependencies]
 clap      = { version = "4", features = ["derive", "env"] }
