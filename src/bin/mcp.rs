@@ -13,7 +13,7 @@ use anyhow::Result;
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{Request, StatusCode},
+    http::{request::Parts as HttpParts, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing, Router,
@@ -27,7 +27,7 @@ use governor::{
 };
 use rmcp::{
     model::{
-        CallToolResult, Content, ErrorData, Implementation, ListToolsResult,
+        CallToolResult, Content, ErrorCode, ErrorData, Implementation, ListToolsResult,
         PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
@@ -116,6 +116,31 @@ fn hash_key(key: &str) -> String {
     hex::encode(Sha256::digest(key.as_bytes()))
 }
 
+/// Rate-limit identity injected into HTTP request extensions by `inject_rate_identity`
+/// and read from `call_tool` via `RequestContext → http::request::Parts`.
+#[derive(Clone)]
+struct RateIdentity {
+    key: String,
+    display: String,
+    tier: Tier,
+}
+
+/// Check the rate limiter for the given identity.
+/// Returns `Ok(burst_remaining)` when allowed, `Err(retry_after_secs)` when limited.
+fn check_rate_limit(identity: &RateIdentity, state: &AppState) -> Result<u32, u64> {
+    let limiter = match identity.tier {
+        Tier::Free => &state.free_limiter,
+        Tier::Paid => &state.paid_limiter,
+    };
+    match limiter.check_key(&identity.key) {
+        Ok(snapshot) => Ok(snapshot.remaining_burst_capacity()),
+        Err(not_until) => {
+            let retry = not_until.wait_time_from(DefaultClock::default().now());
+            Err(retry.as_secs().max(1))
+        }
+    }
+}
+
 // ── Shared state ──────────────────────────────────────────────────────────────
 
 type VersionMap = Arc<HashMap<String, Arc<ParseResult>>>;
@@ -202,8 +227,36 @@ impl ServerHandler for McpHandler {
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Some(parts) = context.extensions.get::<HttpParts>() {
+            if let (Some(app_state), Some(identity)) = (
+                parts.extensions.get::<AppState>(),
+                parts.extensions.get::<RateIdentity>(),
+            ) {
+                match check_rate_limit(identity, app_state) {
+                    Ok(burst_remaining) => {
+                        info!(
+                            identity = %identity.display,
+                            burst_remaining,
+                            "request allowed"
+                        );
+                    }
+                    Err(retry_secs) => {
+                        warn!(
+                            identity = %identity.display,
+                            retry_after_secs = retry_secs,
+                            "rate limited"
+                        );
+                        return Err(ErrorData::new(
+                            ErrorCode(-32029),
+                            "rate limited",
+                            Some(json!({ "retry_after_secs": retry_secs })),
+                        ));
+                    }
+                }
+            }
+        }
         let args = request.arguments.unwrap_or_default();
         let json_str = match request.name.as_ref() {
             "list_resources" => self.handle_list_resources(&args),
@@ -539,10 +592,10 @@ async fn authenticate(
     }
 }
 
-async fn rate_limit(
+async fn inject_rate_identity(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
     let tier = req
@@ -550,60 +603,24 @@ async fn rate_limit(
         .get::<Tier>()
         .cloned()
         .unwrap_or(Tier::Free);
-
-    let (rate_key, identity) = if state.anon_mode {
+    let (key, display) = if state.anon_mode {
         let ip = addr.ip().to_string();
         (ip.clone(), ip)
     } else {
-        let raw_key = req
+        let raw = req
             .headers()
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .unwrap_or("")
             .to_string();
-        let masked = mask_key(&raw_key);
-        (raw_key, masked)
+        let display = mask_key(&raw);
+        (raw, display)
     };
-
-    let version = req
-        .uri()
-        .query()
-        .and_then(|q| query_version(q))
-        .unwrap_or("-");
-    let tier_label = match tier {
-        Tier::Free => "free",
-        Tier::Paid => "paid",
-    };
-
-    let limiter = match tier {
-        Tier::Free => &state.free_limiter,
-        Tier::Paid => &state.paid_limiter,
-    };
-
-    match limiter.check_key(&rate_key) {
-        Ok(state_snapshot) => {
-            info!(
-                identity = %identity,
-                version,
-                tier = tier_label,
-                burst_remaining = state_snapshot.remaining_burst_capacity(),
-                "request allowed"
-            );
-            next.run(req).await
-        }
-        Err(not_until) => {
-            let retry_after = not_until.wait_time_from(DefaultClock::default().now());
-            warn!(
-                identity = %identity,
-                version,
-                tier = tier_label,
-                retry_after_secs = retry_after.as_secs_f32(),
-                "rate limited"
-            );
-            StatusCode::TOO_MANY_REQUESTS.into_response()
-        }
-    }
+    req.extensions_mut()
+        .insert(RateIdentity { key, display, tier });
+    req.extensions_mut().insert(state);
+    next.run(req).await
 }
 
 // ── Health probe ─────────────────────────────────────────────────────────────
@@ -742,7 +759,10 @@ async fn main() -> Result<()> {
 
     let protected = Router::new()
         .route("/mcp", routing::any(mcp_handler))
-        .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            inject_rate_identity,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate));
 
     let app = Router::new()
@@ -1475,22 +1495,6 @@ mod middleware_tests {
             .with_state(state)
     }
 
-    fn rate_router(state: AppState) -> Router {
-        // Pre-inject Tier::Free so rate_limit doesn't need authenticate upstream
-        Router::new()
-            .route(
-                "/mcp",
-                routing::get(|| async { StatusCode::OK }).layer(middleware::from_fn(
-                    |mut req: Request<Body>, next: Next| async move {
-                        req.extensions_mut().insert(Tier::Free);
-                        next.run(req).await
-                    },
-                )),
-            )
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
-            .with_state(state)
-    }
-
     // ── authenticate: anon mode ───────────────────────────────────────────────
 
     #[tokio::test]
@@ -1542,80 +1546,73 @@ mod middleware_tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    // ── rate_limit: anon mode (keyed by IP) ───────────────────────────────────
+    // ── check_rate_limit: free tier (keyed by IP in anon mode) ──────────────
 
-    #[tokio::test]
-    async fn rate_limit_anon_same_ip_exhausted() {
-        // burst=2 so the third request from the same IP is rejected
+    fn free_identity(key: &str) -> RateIdentity {
+        RateIdentity {
+            key: key.into(),
+            display: key.into(),
+            tier: Tier::Free,
+        }
+    }
+
+    #[test]
+    fn check_rate_limit_free_exhausted() {
+        // burst=2: third call is rate-limited
         let state = AppState {
             free_limiter: make_limiter(2, 60),
             ..anon_state()
         };
-
-        for expected in [
-            StatusCode::OK,
-            StatusCode::OK,
-            StatusCode::TOO_MANY_REQUESTS,
-        ] {
-            let resp = rate_router(state.clone())
-                .oneshot(req_from([10, 0, 0, 1]))
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), expected);
-        }
+        let id = free_identity("10.0.0.1");
+        assert!(check_rate_limit(&id, &state).is_ok());
+        assert!(check_rate_limit(&id, &state).is_ok());
+        assert!(check_rate_limit(&id, &state).is_err());
     }
 
-    #[tokio::test]
-    async fn rate_limit_anon_different_ips_independent() {
-        // burst=1: IP A exhausts its bucket, IP B still gets its first request
+    #[test]
+    fn check_rate_limit_different_keys_independent() {
+        // burst=1: key A exhausts its bucket; key B still has capacity
         let state = AppState {
             free_limiter: make_limiter(1, 60),
             ..anon_state()
         };
-
-        let ok = rate_router(state.clone())
-            .oneshot(req_from([10, 0, 0, 1]))
-            .await
-            .unwrap();
-        assert_eq!(ok.status(), StatusCode::OK);
-
-        let exhausted = rate_router(state.clone())
-            .oneshot(req_from([10, 0, 0, 1]))
-            .await
-            .unwrap();
-        assert_eq!(exhausted.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        let different_ip = rate_router(state)
-            .oneshot(req_from([10, 0, 0, 2]))
-            .await
-            .unwrap();
-        assert_eq!(different_ip.status(), StatusCode::OK);
+        assert!(check_rate_limit(&free_identity("10.0.0.1"), &state).is_ok());
+        assert!(check_rate_limit(&free_identity("10.0.0.1"), &state).is_err());
+        assert!(check_rate_limit(&free_identity("10.0.0.2"), &state).is_ok());
     }
 
-    // ── rate_limit: auth mode (keyed by token, not IP) ───────────────────────
+    // ── check_rate_limit: auth mode (keyed by token) ─────────────────────────
 
-    #[tokio::test]
-    async fn rate_limit_auth_same_key_different_ips_share_bucket() {
-        // burst=1: two requests with the same Bearer token from different IPs
-        // share a bucket — the second is rejected even though it came from a new IP
-        let raw = "shared-key";
-        let mut keys = HashMap::new();
-        keys.insert(hash_key(raw), Tier::Free);
+    #[test]
+    fn check_rate_limit_same_token_different_displays_share_bucket() {
+        // Same raw token from two "different IPs" shares one governor bucket
         let state = AppState {
             free_limiter: make_limiter(1, 60),
-            ..auth_state(keys)
+            ..anon_state()
         };
+        let id1 = RateIdentity {
+            key: "shared-key".into(),
+            display: "***rkey".into(),
+            tier: Tier::Free,
+        };
+        let id2 = RateIdentity {
+            key: "shared-key".into(),
+            display: "***rkey".into(),
+            tier: Tier::Free,
+        };
+        assert!(check_rate_limit(&id1, &state).is_ok());
+        assert!(check_rate_limit(&id2, &state).is_err());
+    }
 
-        let ok = rate_router(state.clone())
-            .oneshot(req_with_bearer([10, 0, 0, 1], raw))
-            .await
-            .unwrap();
-        assert_eq!(ok.status(), StatusCode::OK);
-
-        let rejected = rate_router(state)
-            .oneshot(req_with_bearer([10, 0, 0, 2], raw))
-            .await
-            .unwrap();
-        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+    #[test]
+    fn check_rate_limit_returns_retry_after_secs() {
+        let state = AppState {
+            free_limiter: make_limiter(1, 60),
+            ..anon_state()
+        };
+        let id = free_identity("key");
+        assert!(check_rate_limit(&id, &state).is_ok());
+        let retry = check_rate_limit(&id, &state).unwrap_err();
+        assert!(retry >= 1, "retry_after_secs must be >= 1, got {retry}");
     }
 }
