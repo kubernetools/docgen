@@ -11,6 +11,10 @@ pub const FOOTER_TEXT: &str = "Kubernetools &mdash; Kubernetes API Reference";
 // ── Navigation ────────────────────────────────────────────────────────────────
 pub const NAV_LABEL_BREADCRUMB: &str = "Breadcrumb";
 pub const NAV_LABEL_API_GROUPS: &str = "API Groups";
+pub const NAV_LABEL_PAGE_NAV: &str = "Page navigation";
+pub const NAV_LABEL_ON_THIS_PAGE: &str = "On this page";
+pub const NAV_LABEL_IN_THIS_GROUP: &str = "In this group";
+pub const NAV_LABEL_JUMP_TO_NAV: &str = "Jump to navigation ↓";
 pub const BREADCRUMB_HOME: &str = "Home";
 pub const BREADCRUMB_COMMON_DEFS: &str = "Common Definitions";
 pub const SECTION_BY_GROUP: &str = "API Resources by Group";
@@ -106,6 +110,10 @@ pub struct UiCopy {
     pub footer_text: &'static str,
     pub nav_label_breadcrumb: &'static str,
     pub nav_label_api_groups: &'static str,
+    pub nav_label_page_nav: &'static str,
+    pub nav_label_on_this_page: &'static str,
+    pub nav_label_in_this_group: &'static str,
+    pub nav_label_jump_to_nav: &'static str,
     pub breadcrumb_home: &'static str,
     pub breadcrumb_common_defs: &'static str,
     pub section_by_group: &'static str,
@@ -127,6 +135,10 @@ impl UiCopy {
             footer_text: FOOTER_TEXT,
             nav_label_breadcrumb: NAV_LABEL_BREADCRUMB,
             nav_label_api_groups: NAV_LABEL_API_GROUPS,
+            nav_label_page_nav: NAV_LABEL_PAGE_NAV,
+            nav_label_on_this_page: NAV_LABEL_ON_THIS_PAGE,
+            nav_label_in_this_group: NAV_LABEL_IN_THIS_GROUP,
+            nav_label_jump_to_nav: NAV_LABEL_JUMP_TO_NAV,
             breadcrumb_home: BREADCRUMB_HOME,
             breadcrumb_common_defs: BREADCRUMB_COMMON_DEFS,
             section_by_group: SECTION_BY_GROUP,

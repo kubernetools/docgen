@@ -25,9 +25,38 @@
       </ol>
     </nav>
   </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+  {% if toc or same_group %}<a href="#page-nav" class="jump-to-nav">{{ copy.nav_label_jump_to_nav }}</a>{% endif %}
+  <div class="layout{% if toc or same_group %} has-sidebar{% endif %}">
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+    {% if toc or same_group %}
+    <nav class="sidebar" id="page-nav" aria-label="{{ copy.nav_label_page_nav }}">
+      {% if toc %}
+      <section class="sidebar-section">
+        <h2 class="sidebar-heading">{{ copy.nav_label_on_this_page }}</h2>
+        <ul>
+          {% for entry in toc %}
+          <li><a href="{{ entry.href | safe }}">{{ entry.label }}</a></li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+      {% if same_group %}
+      <section class="sidebar-section">
+        <h2 class="sidebar-heading">{{ copy.nav_label_in_this_group }}</h2>
+        <ul>
+          {% for item in same_group %}
+          <li{% if item.is_current %} class="current"{% endif %}>
+            <a href="{{ item.href | safe }}">{{ item.kind }}</a>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+    </nav>
+    {% endif %}
+  </div>
   <footer>
     <p>{{ copy.footer_text | safe }}</p>
   </footer>
