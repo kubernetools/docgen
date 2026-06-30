@@ -180,6 +180,8 @@ pub fn render(
             meta_description: copy::meta_version_index(k8s_version),
             page_title: copy::title_version_index(&version_label),
             copy: UiCopy::new(),
+            toc: vec![],
+            same_group: vec![],
         };
         write_html(
             &env,
@@ -215,6 +217,17 @@ pub fn render(
                 .collect();
             resource_links.sort_by(|a, b| a.kind.cmp(&b.kind));
 
+            // Build same_group links now so they can be shared between the group index
+            // and each individual resource page in this group.
+            let same_group_items: Vec<SameGroupItem> = resource_links
+                .iter()
+                .map(|rl| SameGroupItem {
+                    kind: rl.kind.clone(),
+                    href: rl.versions[0].href.clone(),
+                    is_current: false,
+                })
+                .collect();
+
             let group_ctx = GroupIndexCtx {
                 group_display: group.clone(),
                 k8s_version: k8s_version.clone(),
@@ -239,6 +252,8 @@ pub fn render(
                 meta_description: copy::meta_group_index(group, k8s_version),
                 page_title: copy::title_group_index(group, &version_label),
                 copy: UiCopy::new(),
+                toc: vec![],
+                same_group: vec![],
             };
             write_html(
                 &env,
@@ -364,6 +379,41 @@ pub fn render(
                     })
                     .unwrap_or_default();
 
+                let mut toc: Vec<TocEntry> = Vec::new();
+                if !fields.is_empty() {
+                    toc.push(TocEntry {
+                        label: copy::HEADING_FIELDS.to_string(),
+                        href: "#fields-heading".to_string(),
+                    });
+                }
+                if !spec_fields.is_empty() {
+                    toc.push(TocEntry {
+                        label: resource.spec_name.clone(),
+                        href: format!("#{}", resource.spec_name.to_lowercase()),
+                    });
+                }
+                if !status_fields.is_empty() {
+                    toc.push(TocEntry {
+                        label: resource.status_name.clone(),
+                        href: format!("#{}", resource.status_name.to_lowercase()),
+                    });
+                }
+                if !list_fields.is_empty() {
+                    toc.push(TocEntry {
+                        label: format!("{}List", resource.kind),
+                        href: "#list-heading".to_string(),
+                    });
+                }
+
+                let same_group: Vec<SameGroupItem> = same_group_items
+                    .iter()
+                    .map(|item| SameGroupItem {
+                        kind: item.kind.clone(),
+                        href: item.href.clone(),
+                        is_current: item.kind == resource.kind,
+                    })
+                    .collect();
+
                 let ctx = ResourcePageCtx {
                     kind: resource.kind.clone(),
                     kind_lower: kind_lower.clone(),
@@ -415,6 +465,8 @@ pub fn render(
                         &version_label,
                     ),
                     copy: UiCopy::new(),
+                    toc,
+                    same_group,
                 };
                 write_html(
                     &env,
@@ -463,6 +515,8 @@ pub fn render(
                 meta_description: copy::meta_common_defs_index(k8s_version),
                 page_title: copy::title_common_defs_index(&version_label),
                 copy: UiCopy::new(),
+                toc: vec![],
+                same_group: vec![],
             };
             write_html(
                 &env,
@@ -494,6 +548,27 @@ pub fn render(
                     simple_types,
                     &mut cd_visited,
                 );
+                let cd_toc = if !fields.is_empty() {
+                    vec![TocEntry {
+                        label: copy::HEADING_FIELDS.to_string(),
+                        href: "#fields-heading".to_string(),
+                    }]
+                } else {
+                    vec![]
+                };
+
+                let cd_same_group: Vec<SameGroupItem> = version_common_defs
+                    .iter()
+                    .map(|sibling| SameGroupItem {
+                        kind: sibling.name.clone(),
+                        href: format!(
+                            "/docs/{nav_prefix}/common-definitions/{}/",
+                            sibling.name.to_lowercase()
+                        ),
+                        is_current: sibling.name == cd.name,
+                    })
+                    .collect();
+
                 let ctx = CommonDefPageCtx {
                     name: cd.name.clone(),
                     description: md_to_html(&cd.description),
@@ -524,6 +599,8 @@ pub fn render(
                     meta_description: copy::meta_common_def(&cd.name, k8s_version, &cd.description),
                     page_title: copy::title_common_def(&cd.name, &version_label),
                     copy: UiCopy::new(),
+                    toc: cd_toc,
+                    same_group: cd_same_group,
                 };
                 write_html(
                     &env,
@@ -2909,6 +2986,483 @@ mod tests {
         assert!(
             container_pos < probe_pos,
             "Container section must appear before Probe section"
+        );
+    }
+
+    // ── Sidebar / TOC / same-group ─────────────────────────────────────────────
+
+    #[test]
+    fn sidebar_absent_on_version_index() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(dir.path().join("docs/latest/index.html")).unwrap();
+        assert!(
+            !html.contains("has-sidebar"),
+            "version index must not have the has-sidebar class"
+        );
+        assert!(
+            !html.contains(r#"id="page-nav""#),
+            "version index must not render a sidebar nav"
+        );
+    }
+
+    #[test]
+    fn sidebar_absent_on_group_index() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(dir.path().join("docs/latest/core/index.html")).unwrap();
+        assert!(
+            !html.contains("has-sidebar"),
+            "group index must not have the has-sidebar class"
+        );
+        assert!(
+            !html.contains(r#"id="page-nav""#),
+            "group index must not render a sidebar nav"
+        );
+    }
+
+    #[test]
+    fn sidebar_present_on_resource_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![model_field("nodeName", "Node name.")];
+        render(
+            &[r],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("has-sidebar"),
+            "resource page with fields must have the has-sidebar class"
+        );
+        assert!(
+            html.contains(r#"id="page-nav""#),
+            "resource page must render the sidebar nav with id=page-nav"
+        );
+    }
+
+    #[test]
+    fn jump_to_nav_link_present_on_resource_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![model_field("nodeName", "Node name.")];
+        render(
+            &[r],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("href=\"#page-nav\""),
+            "resource page must have a jump-to-nav link pointing to #page-nav"
+        );
+        assert!(
+            html.contains("jump-to-nav"),
+            "resource page must have a jump-to-nav element"
+        );
+    }
+
+    #[test]
+    fn jump_to_nav_link_absent_on_index_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        for path in ["docs/latest/index.html", "docs/latest/core/index.html"] {
+            let html = std::fs::read_to_string(dir.path().join(path)).unwrap();
+            assert!(
+                !html.contains("jump-to-nav"),
+                "{path}: index pages must not have a jump-to-nav link"
+            );
+        }
+    }
+
+    #[test]
+    fn toc_has_fields_link_when_fields_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.fields = vec![model_field("nodeName", "Node name.")];
+        render(
+            &[r],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("href=\"#fields-heading\""),
+            "TOC must link to #fields-heading when fields are present"
+        );
+    }
+
+    #[test]
+    fn toc_has_spec_link_when_spec_fields_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.spec_name = "PodSpec".into();
+        r.spec_fields = vec![model_field("nodeName", "Node name.")];
+        render(
+            &[r],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("href=\"#podspec\""),
+            "TOC must link to #podspec when spec_fields are present"
+        );
+        assert!(
+            html.contains(">PodSpec<"),
+            "TOC must label the spec link with the spec_name"
+        );
+    }
+
+    #[test]
+    fn toc_has_status_link_when_status_fields_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.status_name = "PodStatus".into();
+        r.status_fields = vec![model_field("phase", "Pod phase.")];
+        render(
+            &[r],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("href=\"#podstatus\""),
+            "TOC must link to #podstatus when status_fields are present"
+        );
+        assert!(
+            html.contains(">PodStatus<"),
+            "TOC must label the status link with the status_name"
+        );
+    }
+
+    #[test]
+    fn toc_has_list_link_when_list_fields_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = make_resource("Pod");
+        r.list_fields = vec![model_field("items", "List of pods.")];
+        render(
+            &[r],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains("href=\"#list-heading\""),
+            "TOC must link to #list-heading when list_fields are present"
+        );
+        assert!(
+            html.contains(">PodList<"),
+            "TOC must label the list link with KindList"
+        );
+    }
+
+    #[test]
+    fn same_group_lists_all_resources_in_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = vec![
+            make_resource("ConfigMap"),
+            make_resource("Pod"),
+            make_resource("Secret"),
+        ];
+        render(
+            &resources,
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        assert!(
+            html.contains(">ConfigMap<"),
+            "same-group sidebar must list ConfigMap"
+        );
+        assert!(html.contains(">Pod<"), "same-group sidebar must list Pod");
+        assert!(
+            html.contains(">Secret<"),
+            "same-group sidebar must list Secret"
+        );
+    }
+
+    #[test]
+    fn same_group_marks_current_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = vec![make_resource("ConfigMap"), make_resource("Pod")];
+        render(
+            &resources,
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("docs/latest/core/v1/pod/index.html")).unwrap();
+        // <li class="current"> and <a href> are on separate lines.
+        // Bound the check to the current <li>…</li> block only.
+        let current_pos = html
+            .find(r#"class="current""#)
+            .expect("must have one current item in the sidebar");
+        let close_pos = html[current_pos..]
+            .find("</li>")
+            .map(|p| current_pos + p + 5)
+            .unwrap_or(html.len());
+        let current_item = &html[current_pos..close_pos];
+        assert!(
+            current_item.contains("/pod/"),
+            "Pod must be the current item in the same-group sidebar"
+        );
+        assert!(
+            !current_item.contains("/configmap/"),
+            "ConfigMap must not appear inside the current <li> on the Pod page"
+        );
+    }
+
+    #[test]
+    fn same_group_links_use_primary_version() {
+        let dir = tempfile::tempdir().unwrap();
+        // Two versions of the same kind in the same group.
+        let r_v1 = docgen::model::Resource {
+            kind: "Deployment".into(),
+            group: "apps".into(),
+            api_version: "v1".into(),
+            k8s_version: "v1.33".into(),
+            description: String::new(),
+            fields: vec![],
+            list_description: String::new(),
+            list_fields: vec![],
+            spec_name: String::new(),
+            spec_description: String::new(),
+            spec_fields: vec![],
+            status_name: String::new(),
+            status_description: String::new(),
+            status_fields: vec![],
+        };
+        let mut r_v1beta1 = r_v1.clone();
+        r_v1beta1.api_version = "v1beta1".into();
+        render(
+            &[r_v1, r_v1beta1],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        // On the v1beta1 page, the same-group link for Deployment must point to v1 (primary).
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/latest/apps/v1beta1/deployment/index.html"),
+        )
+        .unwrap();
+        assert!(
+            html.contains(r#"href="/docs/latest/apps/v1/deployment/""#),
+            "same-group link must point to the primary (highest-ranked) version"
+        );
+    }
+
+    #[test]
+    fn common_def_toc_has_fields_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cd = make_common_def("Condition");
+        cd.fields = vec![model_field("status", "Status of the condition.")];
+        render(
+            &[make_resource("Pod")],
+            &[cd],
+            dir.path(),
+            "https://example.com",
+            false,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/condition/index.html"),
+        )
+        .unwrap();
+        assert!(
+            html.contains("href=\"#fields-heading\""),
+            "common def TOC must link to #fields-heading when fields are present"
+        );
+    }
+
+    #[test]
+    fn common_def_same_group_marks_current() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("Condition"), make_common_def("Status")],
+            dir.path(),
+            "https://example.com",
+            false,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/condition/index.html"),
+        )
+        .unwrap();
+        // <li class="current"> and <a href> are on separate lines.
+        // Bound the check to the current <li>…</li> block only.
+        let current_pos = html
+            .find(r#"class="current""#)
+            .expect("must have one current item in the sidebar");
+        let close_pos = html[current_pos..]
+            .find("</li>")
+            .map(|p| current_pos + p + 5)
+            .unwrap_or(html.len());
+        let current_item = &html[current_pos..close_pos];
+        assert!(
+            current_item.contains("/condition/"),
+            "Condition must be the current item in the sidebar on its own page"
+        );
+        assert!(
+            !current_item.contains("/status/"),
+            "Status must not appear inside the current <li> on the Condition page"
+        );
+    }
+
+    #[test]
+    fn common_def_same_group_lists_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[make_common_def("Condition"), make_common_def("Status")],
+            dir.path(),
+            "https://example.com",
+            false,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(
+            dir.path()
+                .join("docs/v1.33/common-definitions/condition/index.html"),
+        )
+        .unwrap();
+        assert!(html.contains(">Condition<"), "sidebar must list Condition");
+        assert!(
+            html.contains(">Status<"),
+            "sidebar must list Status as a sibling"
         );
     }
 

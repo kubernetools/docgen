@@ -34,10 +34,10 @@ src/
     resolve.rs     $ref / allOf resolution → FieldType; short_name() strips schema prefix
   renderer/
     mod.rs         minijinja env setup, page dispatch, helper functions
-    pages.rs       Context structs passed to templates (ResourcePageCtx, GroupIndexCtx, CommonDefPageCtx, …)
+    pages.rs       Context structs passed to templates (ResourcePageCtx, GroupIndexCtx, CommonDefPageCtx, …); TocEntry, SameGroupItem
     sitemap.rs     Pure-Rust sitemap.xml generation
 templates/
-  base.html              DOCTYPE, <head>, breadcrumb nav, CSS, {% block content %}
+  base.html              DOCTYPE, <head>, breadcrumb nav, jump-to-nav link, two-column layout, sidebar nav (toc + same_group), CSS, {% block content %}
   resource.html          extends base — field_dl + render_type_section macros; fields / spec / status / list + type sections
   group_index.html       extends base — one row per kind, all versions on same line
   version_index.html     extends base — list of groups for a k8s version
@@ -286,6 +286,39 @@ live in `src/renderer/copy.rs`, not be hardcoded in `renderer/mod.rs` or templat
   and expose it through `UiCopy` so templates can access it via `{{ copy.field_name }}`.
 - **In `renderer/mod.rs`**: reference constants as `copy::CONSTANT_NAME`, never inline strings.
 - **In templates**: reference labels via `{{ copy.field_name }}`, never hardcode English text.
+
+### Sidebar navigation
+
+All page context structs carry two fields consumed by `base.html`:
+
+```rust
+pub toc: Vec<TocEntry>,             // "On this page" anchor links
+pub same_group: Vec<SameGroupItem>, // "In this group" peer links
+```
+
+`TocEntry { label: String, href: String }` — one entry per non-empty section on
+the page. Hrefs are in-page anchors: `#fields-heading`, `#{kind_lower}spec`,
+`#{kind_lower}status`, `#list-heading`.
+
+`SameGroupItem { kind: String, href: String, is_current: bool }` — one entry per
+peer resource in the group (or per common definition on common-def pages). `href`
+always points to the primary (highest-ranked) version's page. `is_current` is
+`true` only for the resource being rendered.
+
+**Index pages** (version, group, common-defs index) always pass empty slices —
+no sidebar is rendered and no `.has-sidebar` class is added.
+
+**Layout** — `base.html` conditionally adds `.has-sidebar` to the `.layout` div
+when `toc or same_group` is truthy. DOM order is `<main>` before
+`<nav class="sidebar" id="page-nav">` so mobile receives content first. On
+desktop, `nav.sidebar { order: -1; }` visually places the sidebar on the left
+with `grid-template-columns: 220px 1fr`.
+
+**Mobile** (≤ 800 px) — grid collapses to a single column; sidebar appears after
+content. A `<a href="#page-nav" class="jump-to-nav">` link sits above the
+`.layout` div (hidden on desktop via `display: none`, shown on mobile). **This
+link must live outside the `.layout.has-sidebar` div**; placing it inside causes
+it to receive the grid gap and creates a large blank space below it.
 
 ### Templates
 - Engine: **minijinja 2** — templates embedded via `include_str!` (binary is self-contained).

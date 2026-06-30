@@ -2,6 +2,19 @@ use super::copy::UiCopy;
 use serde::Serialize;
 
 #[derive(Serialize)]
+pub struct TocEntry {
+    pub label: String,
+    pub href: String,
+}
+
+#[derive(Serialize)]
+pub struct SameGroupItem {
+    pub kind: String,
+    pub href: String,
+    pub is_current: bool,
+}
+
+#[derive(Serialize)]
 pub struct CommonDefLink {
     pub name: String,
     pub href: String,
@@ -21,6 +34,8 @@ pub struct CommonDefPageCtx {
     pub meta_description: String,
     pub page_title: String,
     pub copy: UiCopy,
+    pub toc: Vec<TocEntry>,
+    pub same_group: Vec<SameGroupItem>,
 }
 
 #[derive(Serialize)]
@@ -40,6 +55,8 @@ pub struct CommonDefsIndexCtx {
     pub meta_description: String,
     pub page_title: String,
     pub copy: UiCopy,
+    pub toc: Vec<TocEntry>,
+    pub same_group: Vec<SameGroupItem>,
 }
 
 #[derive(Serialize)]
@@ -100,6 +117,8 @@ pub struct ResourcePageCtx {
     pub json_ld: String,
     pub page_title: String,
     pub copy: UiCopy,
+    pub toc: Vec<TocEntry>,
+    pub same_group: Vec<SameGroupItem>,
 }
 
 #[derive(Serialize, Clone)]
@@ -127,9 +146,11 @@ pub struct GroupIndexCtx {
     pub meta_description: String,
     pub page_title: String,
     pub copy: UiCopy,
+    pub toc: Vec<TocEntry>,
+    pub same_group: Vec<SameGroupItem>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct GroupLink {
     pub display: String,
     pub href: String,
@@ -147,4 +168,6 @@ pub struct VersionIndexCtx {
     pub meta_description: String,
     pub page_title: String,
     pub copy: UiCopy,
+    pub toc: Vec<TocEntry>,
+    pub same_group: Vec<SameGroupItem>,
 }

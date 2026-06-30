@@ -2,7 +2,7 @@
 body {
   font-family: system-ui, -apple-system, sans-serif;
   line-height: 1.6;
-  max-width: 960px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 1rem 1.5rem;
   color: #111;
@@ -24,6 +24,90 @@ nav[aria-label="Breadcrumb"] li + li::before {
   color: #777;
   margin-right: 0.5rem;
 }
+
+/* Pages without a sidebar keep the original reading width, centered. */
+.layout:not(.has-sidebar) main {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* ── Two-column layout (only when sidebar is present) ───────────────────────── */
+.layout.has-sidebar {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 2.5rem;
+  align-items: start;
+}
+nav.sidebar {
+  order: -1;
+}
+.jump-to-nav { display: none; }
+
+@media (max-width: 800px) {
+  .layout.has-sidebar {
+    grid-template-columns: 1fr;
+  }
+  nav.sidebar {
+    order: 0;
+    position: static !important;
+    max-height: none !important;
+    border-top: 1px solid #eee;
+    padding-top: 1rem;
+    margin-top: 1rem;
+  }
+  .jump-to-nav {
+    display: inline-block;
+    font-size: 0.85em;
+  }
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────────────────── */
+nav.sidebar {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  font-size: 0.9em;
+  padding-right: 0.5rem;
+}
+.sidebar ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.sidebar li {
+  margin: 0.25rem 0;
+}
+.sidebar a {
+  text-decoration: none;
+  color: #444;
+  display: block;
+  padding: 0.1rem 0.25rem;
+  border-radius: 3px;
+}
+.sidebar a:hover {
+  color: #0066cc;
+  background: #f5f5f5;
+}
+.sidebar li.current > a {
+  font-weight: 600;
+  color: #0066cc;
+}
+.sidebar-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e8e8e8;
+}
+.sidebar-heading {
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #999;
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+/* ── Badges, types, fields ─────────────────────────────────────────────────── */
 .badge {
   display: inline-block;
   font-size: 0.75em;
