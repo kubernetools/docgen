@@ -353,6 +353,9 @@ cargo run --release --bin mcp -- \
   --key-store keys.json
 # RUST_LOG=info  (default)
 # GITHUB_TOKEN=ghp_...  (optional, avoids GitHub rate limits when loading 4+ versions)
+
+# MCP endpoint: http://localhost:3000/?version=v1.33
+# Health probe:  http://localhost:3000/healthz
 ```
 
 ### Module map

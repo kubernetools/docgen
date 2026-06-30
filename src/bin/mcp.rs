@@ -13,9 +13,9 @@ use anyhow::Result;
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{request::Parts as HttpParts, Request, StatusCode},
+    http::{header, request::Parts as HttpParts, Method, Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing, Router,
 };
 use clap::Parser;
@@ -72,6 +72,10 @@ struct Cli {
     /// When omitted, host validation is disabled (suitable for local development only).
     #[arg(long, value_delimiter = ',', env = "ALLOWED_HOSTS")]
     allowed_hosts: Vec<String>,
+    /// URL to redirect non-MCP browser requests to (e.g. https://www.kubernetools.com).
+    /// When omitted, browser GETs receive 400 Bad Request.
+    #[arg(long, env = "BROWSER_REDIRECT_URL")]
+    browser_redirect: Option<String>,
 }
 
 // ── Auth / rate-limit types ───────────────────────────────────────────────────
@@ -156,6 +160,7 @@ struct AppState {
     auth_limiter: KeyLimiter,
     ready: Arc<AtomicBool>,
     anon_mode: bool,
+    browser_redirect: Option<String>,
 }
 
 // ── Tool response types ───────────────────────────────────────────────────────
@@ -636,6 +641,21 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
 // ── Version routing ───────────────────────────────────────────────────────────
 
 async fn mcp_handler(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
+    let is_browser_get = req.method() == Method::GET
+        && !req
+            .headers()
+            .get(header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .contains("text/event-stream");
+
+    if is_browser_get {
+        return match &state.browser_redirect {
+            Some(url) => Redirect::temporary(url).into_response(),
+            None => StatusCode::BAD_REQUEST.into_response(),
+        };
+    }
+
     let version_param = req
         .uri()
         .query()
@@ -755,10 +775,11 @@ async fn main() -> Result<()> {
         auth_limiter,
         ready,
         anon_mode,
+        browser_redirect: cli.browser_redirect,
     };
 
     let protected = Router::new()
-        .route("/mcp", routing::any(mcp_handler))
+        .route("/", routing::any(mcp_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             inject_rate_identity,
@@ -902,6 +923,7 @@ mod tests {
             auth_limiter: make_limiter(20, 3),
             ready: flag,
             anon_mode: false,
+            browser_redirect: None,
         }
     }
 
@@ -1454,6 +1476,7 @@ mod middleware_tests {
             auth_limiter: make_limiter(20, 3),
             ready: Arc::new(AtomicBool::new(true)),
             anon_mode: true,
+            browser_redirect: None,
         }
     }
 
@@ -1467,11 +1490,12 @@ mod middleware_tests {
             auth_limiter: make_limiter(20, 3),
             ready: Arc::new(AtomicBool::new(true)),
             anon_mode: false,
+            browser_redirect: None,
         }
     }
 
     fn req_from(ip: [u8; 4]) -> Request<Body> {
-        let mut r = Request::builder().uri("/mcp").body(Body::empty()).unwrap();
+        let mut r = Request::builder().uri("/").body(Body::empty()).unwrap();
         r.extensions_mut()
             .insert(ConnectInfo(SocketAddr::from((ip, 1234))));
         r
@@ -1479,7 +1503,7 @@ mod middleware_tests {
 
     fn req_with_bearer(ip: [u8; 4], token: &str) -> Request<Body> {
         let mut r = Request::builder()
-            .uri("/mcp")
+            .uri("/")
             .header("Authorization", format!("Bearer {token}"))
             .body(Body::empty())
             .unwrap();
@@ -1490,7 +1514,7 @@ mod middleware_tests {
 
     fn auth_router(state: AppState) -> Router {
         Router::new()
-            .route("/mcp", routing::get(|| async { StatusCode::OK }))
+            .route("/", routing::get(|| async { StatusCode::OK }))
             .layer(middleware::from_fn_with_state(state.clone(), authenticate))
             .with_state(state)
     }

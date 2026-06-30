@@ -18,7 +18,7 @@ cargo run --release --bin mcp -- \
   --k8s-versions v1.33,v1.34,v1.35,v1.36 \
   --key-store keys.json
 
-# 3. Connect an MCP client to http://localhost:3000/mcp?version=v1.36
+# 3. Connect an MCP client to http://localhost:3000/?version=v1.36
 #    with header: Authorization: Bearer mykey
 ```
 
@@ -26,19 +26,36 @@ cargo run --release --bin mcp -- \
 
 ```
 USAGE:
-    mcp [OPTIONS] --key-store <KEY_STORE>
+    mcp [OPTIONS]
 
 OPTIONS:
-    --k8s-versions <LIST>    Comma-separated Kubernetes versions to pre-load
-                             [default: v1.33]
-                             Example: --k8s-versions v1.33,v1.34,v1.35,v1.36
+    --k8s-versions <LIST>       Comma-separated Kubernetes versions to pre-load
+                                [default: v1.33]  [env: K8S_VERSIONS]
+                                Example: --k8s-versions v1.33,v1.34,v1.35,v1.36
 
-    --token <TOKEN>          GitHub personal access token for higher API rate limits
-                             [env: GITHUB_TOKEN]
+    --token <TOKEN>             GitHub personal access token for higher API rate limits
+                                [env: GITHUB_TOKEN]
 
-    --port <PORT>            TCP port to listen on [default: 3000]
+    --port <PORT>               TCP port to listen on [default: 3000]
 
-    --key-store <PATH>       Path to the API key JSON file [env: KEY_STORE_PATH]
+    --key-store <PATH>          Path to the API key JSON file [env: KEY_STORE_PATH]
+                                When omitted, the server runs in anonymous mode: no
+                                auth is required and all connections are rate-limited
+                                per source IP at the free-tier limit.
+
+    --allowed-hosts <LIST>      Comma-separated Host header values that are accepted
+                                (e.g. mcp.example.com,mcp.example.com:443).
+                                [env: ALLOWED_HOSTS]
+                                When omitted, host validation is disabled — suitable
+                                for local development only. Always set this in
+                                production to prevent DNS-rebinding attacks.
+
+    --browser-redirect <URL>    URL to redirect plain browser GET requests to.
+                                [env: BROWSER_REDIRECT_URL]
+                                MCP clients are detected by the presence of
+                                Accept: text/event-stream on GET requests. A browser
+                                hitting the endpoint instead receives a 307 redirect
+                                to this URL. When omitted, browser GETs return 400.
 ```
 
 ### Loading multiple versions
@@ -53,8 +70,8 @@ All versions are fetched and parsed concurrently at startup. Clients select a
 version per session via the `version` query parameter:
 
 ```
-http://localhost:3000/mcp?version=v1.33
-http://localhost:3000/mcp?version=v1.36
+http://localhost:3000/?version=v1.33
+http://localhost:3000/?version=v1.36
 ```
 
 If `version` is omitted, the first version that was loaded is used. An unknown
@@ -93,6 +110,12 @@ Authorization: Bearer free-key-abc
 
 Requests without a valid key receive `401 Unauthorized`.
 
+### Anonymous mode
+
+When `--key-store` is omitted, the server runs without authentication. All
+connections are accepted and rate-limited per source IP at the free-tier limit.
+This is convenient for local use but should not be exposed publicly.
+
 ### Tiers and rate limits
 
 | Tier | Limit |
@@ -110,7 +133,7 @@ The server implements the
 The endpoint is:
 
 ```
-http://<host>:<port>/mcp[?version=<k8s-version>]
+http://<host>:<port>/[?version=<k8s-version>]
 ```
 
 ### Claude Desktop
@@ -121,7 +144,7 @@ Add the following to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "kubernetools": {
-      "url": "http://localhost:3000/mcp?version=v1.36",
+      "url": "http://localhost:3000/?version=v1.36",
       "headers": {
         "Authorization": "Bearer mykey"
       }
@@ -292,7 +315,8 @@ livenessProbe:
 
 | HTTP status | Cause |
 |-------------|-------|
-| `400 Bad Request` | `version` query parameter names a version not loaded at startup |
+| `307 Temporary Redirect` | Browser GET (no `Accept: text/event-stream`) when `--browser-redirect` is set |
+| `400 Bad Request` | Browser GET when `--browser-redirect` is not set, or `version` parameter names a version not loaded at startup |
 | `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` header |
 | `429 Too Many Requests` | Rate limit exceeded for the key's tier |
 
