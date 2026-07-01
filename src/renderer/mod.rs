@@ -616,6 +616,7 @@ pub fn render(
 
     if is_latest {
         sitemap_urls.push(format!("{base_url}/"));
+        sitemap_urls.push(format!("{base_url}/mcp/"));
         // Evict all previous /docs/latest/ entries; each render fully replaces them.
         let evict_prefixes = vec![format!("{base_url}/docs/latest/")];
         sitemap::generate(&sitemap_urls, &out.join("sitemap.xml"), &evict_prefixes)?;
@@ -1340,6 +1341,29 @@ mod tests {
         assert!(
             sitemap.contains("<loc>https://example.com/</loc>"),
             "sitemap must include the homepage URL"
+        );
+    }
+
+    #[test]
+    fn render_sitemap_includes_mcp_page() {
+        let dir = tempfile::tempdir().unwrap();
+        render(
+            &[make_resource("Pod")],
+            &[],
+            dir.path(),
+            "https://example.com",
+            true,
+            &TypeMaps {
+                classifications: &std::collections::HashMap::new(),
+                simple_types: &std::collections::HashMap::new(),
+                complex_types: &std::collections::HashMap::new(),
+            },
+        )
+        .unwrap();
+        let sitemap = std::fs::read_to_string(dir.path().join("sitemap.xml")).unwrap();
+        assert!(
+            sitemap.contains("<loc>https://example.com/mcp/</loc>"),
+            "sitemap must include the MCP docs page URL"
         );
     }
 
