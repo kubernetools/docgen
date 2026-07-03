@@ -202,11 +202,73 @@ struct TypeDetail {
     fields: Vec<FieldDetail>,
 }
 
+/// Structural field-level differences between two versions of a schema.
+/// Entries are human-readable: "spec.hostUsers (boolean)", "spec.foo: type string -> integer".
+/// Description-only changes are ignored.
+#[derive(Serialize, Default, PartialEq, Debug)]
+struct StructDiff {
+    added_fields: Vec<String>,
+    removed_fields: Vec<String>,
+    changed_fields: Vec<String>,
+}
+
+impl StructDiff {
+    fn is_empty(&self) -> bool {
+        self.added_fields.is_empty()
+            && self.removed_fields.is_empty()
+            && self.changed_fields.is_empty()
+    }
+}
+
+#[derive(Serialize)]
+struct ResourceDiff {
+    kind: String,
+    group: String,
+    api_version: String,
+    #[serde(flatten)]
+    diff: StructDiff,
+}
+
+#[derive(Serialize)]
+struct TypeDiff {
+    name: String,
+    #[serde(flatten)]
+    diff: StructDiff,
+}
+
+#[derive(Serialize)]
+struct VersionDiff {
+    from_k8s_version: String,
+    to_k8s_version: String,
+    added_resources: Vec<ResourceSummary>,
+    removed_resources: Vec<ResourceSummary>,
+    changed_resources: Vec<ResourceDiff>,
+    added_types: Vec<String>,
+    removed_types: Vec<String>,
+    changed_types: Vec<TypeDiff>,
+}
+
+#[derive(Serialize)]
+struct ResourceVersionsDiff {
+    kind: String,
+    group: String,
+    from_api_version: String,
+    to_api_version: String,
+    #[serde(flatten)]
+    diff: StructDiff,
+}
+
 // ── MCP handler ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct McpHandler {
     parsed: Arc<ParseResult>,
+    /// The k8s version this instance serves (e.g. "v1.36").
+    version: String,
+    /// The closest older loaded k8s version, if any.
+    prev: Option<(String, Arc<ParseResult>)>,
+    /// The closest newer loaded k8s version, if any.
+    next: Option<(String, Arc<ParseResult>)>,
 }
 
 impl ServerHandler for McpHandler {
@@ -222,11 +284,19 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(vec![
+        let mut tools = vec![
             make_tool_list_resources(),
             make_tool_get_resource(),
             make_tool_get_type(),
-        ]))
+            make_tool_compare_resource_versions(&self.version),
+        ];
+        if let Some((prev, _)) = &self.prev {
+            tools.push(make_tool_diff_previous_version(&self.version, prev));
+        }
+        if let Some((next, _)) = &self.next {
+            tools.push(make_tool_diff_next_version(&self.version, next));
+        }
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
@@ -267,6 +337,9 @@ impl ServerHandler for McpHandler {
             "list_resources" => self.handle_list_resources(&args),
             "get_resource" => self.handle_get_resource(&args),
             "get_type" => self.handle_get_type(&args),
+            "diff_previous_version" => self.handle_diff_previous_version(),
+            "diff_next_version" => self.handle_diff_next_version(),
+            "compare_resource_versions" => self.handle_compare_resource_versions(&args),
             name => Err(ErrorData::invalid_request(
                 format!("unknown tool '{name}'"),
                 None,
@@ -393,6 +466,127 @@ impl McpHandler {
 
         serde_json::to_string(&detail).map_err(internal)
     }
+
+    fn handle_diff_previous_version(&self) -> Result<String, ErrorData> {
+        let (prev_version, prev) = self.prev.as_ref().ok_or_else(|| {
+            ErrorData::invalid_request(
+                format!(
+                    "no Kubernetes version older than {} is loaded on this server",
+                    self.version
+                ),
+                None,
+            )
+        })?;
+        let diff = version_diff(prev_version, prev, &self.version, &self.parsed);
+        serde_json::to_string(&diff).map_err(internal)
+    }
+
+    fn handle_diff_next_version(&self) -> Result<String, ErrorData> {
+        let (next_version, next) = self.next.as_ref().ok_or_else(|| {
+            ErrorData::invalid_request(
+                format!(
+                    "no Kubernetes version newer than {} is loaded on this server",
+                    self.version
+                ),
+                None,
+            )
+        })?;
+        let diff = version_diff(&self.version, &self.parsed, next_version, next);
+        serde_json::to_string(&diff).map_err(internal)
+    }
+
+    fn handle_compare_resource_versions(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<String, ErrorData> {
+        let kind = args
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData::invalid_params("missing required argument 'kind'", None))?;
+        let from_version = args
+            .get("from_api_version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ErrorData::invalid_params("missing required argument 'from_api_version'", None)
+            })?;
+        let to_version = args
+            .get("to_api_version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ErrorData::invalid_params("missing required argument 'to_api_version'", None)
+            })?;
+        let filter_group = args.get("group").and_then(|v| v.as_str());
+
+        let candidates: Vec<&docgen::model::Resource> = self
+            .parsed
+            .resources
+            .iter()
+            .filter(|r| r.kind == kind)
+            .filter(|r| {
+                filter_group.is_none_or(|g| {
+                    if g == "core" {
+                        r.group.is_empty()
+                    } else {
+                        r.group == g
+                    }
+                })
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "resource '{kind}' not found; call list_resources to discover available kinds"
+                ),
+                None,
+            ));
+        }
+
+        let groups: std::collections::HashSet<&str> =
+            candidates.iter().map(|r| r.group.as_str()).collect();
+        if groups.len() > 1 {
+            let mut names: Vec<String> = groups.iter().map(|g| display_group(g)).collect();
+            names.sort();
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "kind '{kind}' exists in multiple groups ({}); specify 'group'",
+                    names.join(", ")
+                ),
+                None,
+            ));
+        }
+
+        let find = |version: &str| {
+            candidates
+                .iter()
+                .find(|r| r.api_version == version)
+                .copied()
+        };
+        let not_found = |version: &str| {
+            let mut available: Vec<&str> =
+                candidates.iter().map(|r| r.api_version.as_str()).collect();
+            available.sort();
+            ErrorData::invalid_params(
+                format!(
+                    "'{kind}' has no API version '{version}'; available: {}",
+                    available.join(", ")
+                ),
+                None,
+            )
+        };
+        let from = find(from_version).ok_or_else(|| not_found(from_version))?;
+        let to = find(to_version).ok_or_else(|| not_found(to_version))?;
+
+        let result = ResourceVersionsDiff {
+            kind: kind.to_string(),
+            group: display_group(&to.group),
+            from_api_version: from_version.to_string(),
+            to_api_version: to_version.to_string(),
+            diff: resource_struct_diff(from, to),
+        };
+
+        serde_json::to_string(&result).map_err(internal)
+    }
 }
 
 // ── Tool descriptors ──────────────────────────────────────────────────────────
@@ -468,6 +662,69 @@ fn make_tool_get_type() -> Tool {
     t
 }
 
+fn make_tool_diff_previous_version(current: &str, prev: &str) -> Tool {
+    let mut t = Tool::default();
+    t.name = "diff_previous_version".into();
+    t.description = Some(
+        format!(
+            "Changes introduced in Kubernetes {current} (this instance's version) since {prev}: \
+         resources and types added, removed, or structurally changed."
+        )
+        .into(),
+    );
+    t.input_schema = schema_obj(json!({ "type": "object", "properties": {} }));
+    t
+}
+
+fn make_tool_diff_next_version(current: &str, next: &str) -> Tool {
+    let mut t = Tool::default();
+    t.name = "diff_next_version".into();
+    t.description = Some(
+        format!(
+            "Changes the next Kubernetes version ({next}) introduces relative to {current} \
+         (this instance's version): resources and types added, removed, or structurally changed."
+        )
+        .into(),
+    );
+    t.input_schema = schema_obj(json!({ "type": "object", "properties": {} }));
+    t
+}
+
+fn make_tool_compare_resource_versions(current: &str) -> Tool {
+    let mut t = Tool::default();
+    t.name = "compare_resource_versions".into();
+    t.description = Some(
+        format!(
+            "Compare a resource kind between two of its API versions within Kubernetes {current} \
+         (e.g. v1beta1 vs v1): fields added, removed, or changed."
+        )
+        .into(),
+    );
+    t.input_schema = schema_obj(json!({
+        "type": "object",
+        "required": ["kind", "from_api_version", "to_api_version"],
+        "properties": {
+            "kind": {
+                "type": "string",
+                "description": "The resource kind, e.g. 'VolumeAttributesClass'."
+            },
+            "group": {
+                "type": "string",
+                "description": "API group, e.g. 'storage.k8s.io' or 'core'. Required only when the kind exists in several groups."
+            },
+            "from_api_version": {
+                "type": "string",
+                "description": "Baseline API version, e.g. 'v1beta1'."
+            },
+            "to_api_version": {
+                "type": "string",
+                "description": "API version to compare against the baseline, e.g. 'v1'."
+            }
+        }
+    }));
+    t
+}
+
 // ── Helper functions ──────────────────────────────────────────────────────────
 
 fn display_group(group: &str) -> String {
@@ -498,6 +755,174 @@ fn version_rank(v: &str) -> (u32, u32, u32) {
         )
     } else {
         (s.parse().unwrap_or(0), 2, 0)
+    }
+}
+
+/// Ranks a Kubernetes release version string ("v1.33") for chronological ordering.
+fn k8s_version_rank(v: &str) -> (u32, u32) {
+    let s = v.strip_prefix('v').unwrap_or(v);
+    let mut parts = s.splitn(2, '.');
+    let major = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    (major, minor)
+}
+
+/// Compare two field lists by name, recording structural differences into `out`.
+/// `prefix` namespaces the field paths (e.g. "spec."). Descriptions are ignored.
+fn diff_fields(prefix: &str, old: &[Field], new: &[Field], out: &mut StructDiff) {
+    let old_map: HashMap<&str, &Field> = old.iter().map(|f| (f.name.as_str(), f)).collect();
+    let new_names: std::collections::HashSet<&str> = new.iter().map(|f| f.name.as_str()).collect();
+
+    for f in new {
+        match old_map.get(f.name.as_str()) {
+            None => {
+                let required = if f.required { ", required" } else { "" };
+                out.added_fields.push(format!(
+                    "{prefix}{} ({}{required})",
+                    f.name,
+                    field_type_str(&f.field_type)
+                ));
+            }
+            Some(o) => {
+                let old_type = field_type_str(&o.field_type);
+                let new_type = field_type_str(&f.field_type);
+                if old_type != new_type {
+                    out.changed_fields
+                        .push(format!("{prefix}{}: type {old_type} -> {new_type}", f.name));
+                }
+                if o.required != f.required {
+                    let change = if f.required {
+                        "became required"
+                    } else {
+                        "became optional"
+                    };
+                    out.changed_fields
+                        .push(format!("{prefix}{}: {change}", f.name));
+                }
+            }
+        }
+    }
+    for f in old {
+        if !new_names.contains(f.name.as_str()) {
+            out.removed_fields.push(format!("{prefix}{}", f.name));
+        }
+    }
+}
+
+/// Diff all four field sections of two versions of the same resource.
+fn resource_struct_diff(
+    old: &docgen::model::Resource,
+    new: &docgen::model::Resource,
+) -> StructDiff {
+    let mut d = StructDiff::default();
+    diff_fields("", &old.fields, &new.fields, &mut d);
+    diff_fields("spec.", &old.spec_fields, &new.spec_fields, &mut d);
+    diff_fields("status.", &old.status_fields, &new.status_fields, &mut d);
+    diff_fields("list.", &old.list_fields, &new.list_fields, &mut d);
+    d
+}
+
+/// All named types (simple + complex) of a parse result: name -> fields.
+fn all_types(p: &ParseResult) -> HashMap<&str, &Vec<Field>> {
+    p.simple_types
+        .iter()
+        .chain(p.complex_types.iter())
+        .map(|(name, (_, fields))| (name.as_str(), fields))
+        .collect()
+}
+
+/// Full structural diff between two loaded Kubernetes versions.
+fn version_diff(
+    from_version: &str,
+    from: &ParseResult,
+    to_version: &str,
+    to: &ParseResult,
+) -> VersionDiff {
+    let key =
+        |r: &docgen::model::Resource| (r.group.clone(), r.kind.clone(), r.api_version.clone());
+    let from_map: HashMap<_, &docgen::model::Resource> =
+        from.resources.iter().map(|r| (key(r), r)).collect();
+    let to_map: HashMap<_, &docgen::model::Resource> =
+        to.resources.iter().map(|r| (key(r), r)).collect();
+
+    let summary = |r: &docgen::model::Resource| ResourceSummary {
+        kind: r.kind.clone(),
+        group: display_group(&r.group),
+        api_version: r.api_version.clone(),
+        description: first_sentence(&r.description),
+    };
+    let sort_key = |s: &ResourceSummary| (s.group.clone(), s.kind.clone(), s.api_version.clone());
+
+    let mut added_resources = Vec::new();
+    let mut changed_resources = Vec::new();
+    for r in &to.resources {
+        match from_map.get(&key(r)) {
+            None => added_resources.push(summary(r)),
+            Some(old) => {
+                let diff = resource_struct_diff(old, r);
+                if !diff.is_empty() {
+                    changed_resources.push(ResourceDiff {
+                        kind: r.kind.clone(),
+                        group: display_group(&r.group),
+                        api_version: r.api_version.clone(),
+                        diff,
+                    });
+                }
+            }
+        }
+    }
+    let mut removed_resources: Vec<ResourceSummary> = from
+        .resources
+        .iter()
+        .filter(|r| !to_map.contains_key(&key(r)))
+        .map(summary)
+        .collect();
+
+    added_resources.sort_by_key(sort_key);
+    removed_resources.sort_by_key(sort_key);
+    changed_resources.sort_by(|a, b| {
+        (&a.group, &a.kind, &a.api_version).cmp(&(&b.group, &b.kind, &b.api_version))
+    });
+
+    let from_types = all_types(from);
+    let to_types = all_types(to);
+
+    let mut added_types: Vec<String> = to_types
+        .keys()
+        .filter(|name| !from_types.contains_key(*name))
+        .map(|name| name.to_string())
+        .collect();
+    let mut removed_types: Vec<String> = from_types
+        .keys()
+        .filter(|name| !to_types.contains_key(*name))
+        .map(|name| name.to_string())
+        .collect();
+    let mut changed_types = Vec::new();
+    for (name, new_fields) in &to_types {
+        if let Some(old_fields) = from_types.get(name) {
+            let mut diff = StructDiff::default();
+            diff_fields("", old_fields, new_fields, &mut diff);
+            if !diff.is_empty() {
+                changed_types.push(TypeDiff {
+                    name: name.to_string(),
+                    diff,
+                });
+            }
+        }
+    }
+    added_types.sort();
+    removed_types.sort();
+    changed_types.sort_by(|a, b| a.name.cmp(&b.name));
+
+    VersionDiff {
+        from_k8s_version: from_version.to_string(),
+        to_k8s_version: to_version.to_string(),
+        added_resources,
+        removed_resources,
+        changed_resources,
+        added_types,
+        removed_types,
+        changed_types,
     }
 }
 
@@ -748,11 +1173,24 @@ async fn main() -> Result<()> {
     } else {
         StreamableHttpServerConfig::default().with_allowed_hosts(cli.allowed_hosts.clone())
     };
+    let mut sorted_versions: Vec<String> = versions.keys().cloned().collect();
+    sorted_versions.sort_by_key(|v| k8s_version_rank(v));
+
     let mut service_map: HashMap<String, McpService> = HashMap::new();
-    for (version, parsed) in versions.iter() {
-        let p = parsed.clone();
+    for (i, version) in sorted_versions.iter().enumerate() {
+        let neighbor = |j: usize| {
+            sorted_versions
+                .get(j)
+                .map(|v| (v.clone(), versions[v].clone()))
+        };
+        let handler = McpHandler {
+            parsed: versions[version].clone(),
+            version: version.clone(),
+            prev: i.checked_sub(1).and_then(neighbor),
+            next: neighbor(i + 1),
+        };
         let service = StreamableHttpService::new(
-            move || Ok(McpHandler { parsed: p.clone() }),
+            move || Ok(handler.clone()),
             Default::default(),
             mcp_config.clone(),
         );
@@ -859,6 +1297,9 @@ mod tests {
     fn handler_with(parsed: ParseResult) -> McpHandler {
         McpHandler {
             parsed: Arc::new(parsed),
+            version: "v1.33".into(),
+            prev: None,
+            next: None,
         }
     }
 
@@ -1455,6 +1896,298 @@ mod tests {
             complex_types: HashMap::new(),
         });
         assert!(h.handle_get_type(&args(&[])).is_err());
+    }
+
+    // ── k8s_version_rank ─────────────────────────────────────────────────────
+
+    #[test]
+    fn k8s_version_rank_orders_minor() {
+        assert!(k8s_version_rank("v1.36") > k8s_version_rank("v1.35"));
+        assert!(k8s_version_rank("v1.9") < k8s_version_rank("v1.10"));
+    }
+
+    #[test]
+    fn k8s_version_rank_orders_major() {
+        assert!(k8s_version_rank("v2.0") > k8s_version_rank("v1.36"));
+    }
+
+    // ── diff_fields ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn diff_fields_added_removed() {
+        let old = vec![scalar("a"), scalar("b")];
+        let new = vec![scalar("b"), scalar("c")];
+        let mut d = StructDiff::default();
+        diff_fields("spec.", &old, &new, &mut d);
+        assert_eq!(d.added_fields, vec!["spec.c (string)"]);
+        assert_eq!(d.removed_fields, vec!["spec.a"]);
+        assert!(d.changed_fields.is_empty());
+    }
+
+    #[test]
+    fn diff_fields_added_required_is_annotated() {
+        let new = vec![Field {
+            required: true,
+            ..scalar("name")
+        }];
+        let mut d = StructDiff::default();
+        diff_fields("", &[], &new, &mut d);
+        assert_eq!(d.added_fields, vec!["name (string, required)"]);
+    }
+
+    #[test]
+    fn diff_fields_type_change() {
+        let old = vec![scalar("x")];
+        let new = vec![Field {
+            field_type: FieldType::Scalar("integer".into()),
+            ..scalar("x")
+        }];
+        let mut d = StructDiff::default();
+        diff_fields("", &old, &new, &mut d);
+        assert_eq!(d.changed_fields, vec!["x: type string -> integer"]);
+    }
+
+    #[test]
+    fn diff_fields_required_change() {
+        let old = vec![scalar("x")];
+        let new = vec![Field {
+            required: true,
+            ..scalar("x")
+        }];
+        let mut d = StructDiff::default();
+        diff_fields("", &old, &new, &mut d);
+        assert_eq!(d.changed_fields, vec!["x: became required"]);
+    }
+
+    #[test]
+    fn diff_fields_description_change_ignored() {
+        let old = vec![scalar("x")];
+        let new = vec![Field {
+            description: "different description".into(),
+            ..scalar("x")
+        }];
+        let mut d = StructDiff::default();
+        diff_fields("", &old, &new, &mut d);
+        assert!(d.is_empty());
+    }
+
+    // ── version_diff ─────────────────────────────────────────────────────────
+
+    fn parsed_with(resources: Vec<docgen::model::Resource>) -> ParseResult {
+        ParseResult {
+            resources,
+            common_defs: vec![],
+            classifications: HashMap::new(),
+            simple_types: HashMap::new(),
+            complex_types: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn version_diff_added_and_removed_resources() {
+        let from = parsed_with(vec![
+            resource("Pod", "", "v1"),
+            resource("Old", "apps", "v1"),
+        ]);
+        let to = parsed_with(vec![
+            resource("Pod", "", "v1"),
+            resource("New", "apps", "v1"),
+        ]);
+        let d = version_diff("v1.35", &from, "v1.36", &to);
+        assert_eq!(d.from_k8s_version, "v1.35");
+        assert_eq!(d.to_k8s_version, "v1.36");
+        assert_eq!(d.added_resources.len(), 1);
+        assert_eq!(d.added_resources[0].kind, "New");
+        assert_eq!(d.removed_resources.len(), 1);
+        assert_eq!(d.removed_resources[0].kind, "Old");
+        assert!(d.changed_resources.is_empty());
+    }
+
+    #[test]
+    fn version_diff_promotion_is_added_plus_removed() {
+        let from = parsed_with(vec![resource("Foo", "apps", "v1beta1")]);
+        let to = parsed_with(vec![resource("Foo", "apps", "v1")]);
+        let d = version_diff("v1.35", &from, "v1.36", &to);
+        assert_eq!(d.added_resources[0].api_version, "v1");
+        assert_eq!(d.removed_resources[0].api_version, "v1beta1");
+    }
+
+    #[test]
+    fn version_diff_changed_resource_spec_field() {
+        let from = parsed_with(vec![resource("Pod", "", "v1")]);
+        let mut changed = resource("Pod", "", "v1");
+        changed.spec_fields = vec![scalar("hostUsers")];
+        let to = parsed_with(vec![changed]);
+        let d = version_diff("v1.35", &from, "v1.36", &to);
+        assert!(d.added_resources.is_empty());
+        assert_eq!(d.changed_resources.len(), 1);
+        assert_eq!(
+            d.changed_resources[0].diff.added_fields,
+            vec!["spec.hostUsers (string)"]
+        );
+    }
+
+    #[test]
+    fn version_diff_types() {
+        let mut from = parsed_with(vec![]);
+        from.simple_types
+            .insert("Gone".into(), ("d".into(), vec![]));
+        from.complex_types
+            .insert("Container".into(), ("d".into(), vec![scalar("image")]));
+        let mut to = parsed_with(vec![]);
+        to.simple_types.insert("Fresh".into(), ("d".into(), vec![]));
+        to.complex_types.insert(
+            "Container".into(),
+            ("d".into(), vec![scalar("image"), scalar("restartPolicy")]),
+        );
+        let d = version_diff("v1.35", &from, "v1.36", &to);
+        assert_eq!(d.added_types, vec!["Fresh"]);
+        assert_eq!(d.removed_types, vec!["Gone"]);
+        assert_eq!(d.changed_types.len(), 1);
+        assert_eq!(d.changed_types[0].name, "Container");
+        assert_eq!(
+            d.changed_types[0].diff.added_fields,
+            vec!["restartPolicy (string)"]
+        );
+    }
+
+    // ── handle_diff_previous_version / handle_diff_next_version ─────────────
+
+    #[test]
+    fn diff_previous_version_errors_without_prev() {
+        let h = handler_with(parsed_with(vec![]));
+        let err = h.handle_diff_previous_version().unwrap_err();
+        assert!(err.message.contains("v1.33"));
+    }
+
+    #[test]
+    fn diff_next_version_errors_without_next() {
+        let h = handler_with(parsed_with(vec![]));
+        assert!(h.handle_diff_next_version().is_err());
+    }
+
+    #[test]
+    fn diff_previous_version_reports_additions() {
+        let mut h = handler_with(parsed_with(vec![
+            resource("Pod", "", "v1"),
+            resource("New", "apps", "v1"),
+        ]));
+        h.version = "v1.36".into();
+        h.prev = Some((
+            "v1.35".into(),
+            Arc::new(parsed_with(vec![resource("Pod", "", "v1")])),
+        ));
+        let result = h.handle_diff_previous_version().unwrap();
+        let d: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(d["from_k8s_version"], "v1.35");
+        assert_eq!(d["to_k8s_version"], "v1.36");
+        assert_eq!(d["added_resources"][0]["kind"], "New");
+    }
+
+    #[test]
+    fn diff_next_version_diffs_forward() {
+        let mut h = handler_with(parsed_with(vec![resource("Pod", "", "v1")]));
+        h.version = "v1.35".into();
+        h.next = Some((
+            "v1.36".into(),
+            Arc::new(parsed_with(vec![
+                resource("Pod", "", "v1"),
+                resource("New", "apps", "v1"),
+            ])),
+        ));
+        let result = h.handle_diff_next_version().unwrap();
+        let d: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(d["from_k8s_version"], "v1.35");
+        assert_eq!(d["to_k8s_version"], "v1.36");
+        assert_eq!(d["added_resources"][0]["kind"], "New");
+    }
+
+    // ── handle_compare_resource_versions ─────────────────────────────────────
+
+    #[test]
+    fn compare_resource_versions_basic() {
+        let mut beta = resource("VolumeAttributesClass", "storage.k8s.io", "v1beta1");
+        beta.fields.push(scalar("deprecatedField"));
+        let mut stable = resource("VolumeAttributesClass", "storage.k8s.io", "v1");
+        stable.fields.push(scalar("newField"));
+        let h = handler_with(parsed_with(vec![beta, stable]));
+        let result = h
+            .handle_compare_resource_versions(&args(&[
+                ("kind", "VolumeAttributesClass"),
+                ("from_api_version", "v1beta1"),
+                ("to_api_version", "v1"),
+            ]))
+            .unwrap();
+        let d: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(d["kind"], "VolumeAttributesClass");
+        assert_eq!(d["group"], "storage.k8s.io");
+        assert_eq!(d["from_api_version"], "v1beta1");
+        assert_eq!(d["to_api_version"], "v1");
+        assert_eq!(d["added_fields"][0], "newField (string)");
+        assert_eq!(d["removed_fields"][0], "deprecatedField");
+    }
+
+    #[test]
+    fn compare_resource_versions_missing_args() {
+        let h = handler_with(parsed_with(vec![]));
+        assert!(h.handle_compare_resource_versions(&args(&[])).is_err());
+        assert!(h
+            .handle_compare_resource_versions(&args(&[("kind", "Pod")]))
+            .is_err());
+    }
+
+    #[test]
+    fn compare_resource_versions_unknown_kind() {
+        let h = handler_with(parsed_with(vec![]));
+        let err = h
+            .handle_compare_resource_versions(&args(&[
+                ("kind", "Nope"),
+                ("from_api_version", "v1beta1"),
+                ("to_api_version", "v1"),
+            ]))
+            .unwrap_err();
+        assert!(err.message.contains("Nope"));
+    }
+
+    #[test]
+    fn compare_resource_versions_unknown_version_lists_available() {
+        let h = handler_with(parsed_with(vec![
+            resource("CronJob", "batch", "v1"),
+            resource("CronJob", "batch", "v1beta1"),
+        ]));
+        let err = h
+            .handle_compare_resource_versions(&args(&[
+                ("kind", "CronJob"),
+                ("from_api_version", "v2alpha1"),
+                ("to_api_version", "v1"),
+            ]))
+            .unwrap_err();
+        assert!(err.message.contains("v2alpha1"));
+        assert!(err.message.contains("v1beta1"));
+    }
+
+    #[test]
+    fn compare_resource_versions_ambiguous_group_requires_group() {
+        let h = handler_with(parsed_with(vec![
+            resource("Event", "", "v1"),
+            resource("Event", "events.k8s.io", "v1"),
+        ]));
+        let err = h
+            .handle_compare_resource_versions(&args(&[
+                ("kind", "Event"),
+                ("from_api_version", "v1"),
+                ("to_api_version", "v1"),
+            ]))
+            .unwrap_err();
+        assert!(err.message.contains("multiple groups"));
+
+        let result = h.handle_compare_resource_versions(&args(&[
+            ("kind", "Event"),
+            ("group", "core"),
+            ("from_api_version", "v1"),
+            ("to_api_version", "v1"),
+        ]));
+        assert!(result.is_ok());
     }
 }
 
