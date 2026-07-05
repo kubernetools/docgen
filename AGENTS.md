@@ -402,9 +402,10 @@ src/bin/mcp.rs
   make_limiter()         builds governor keyed rate limiter via RateLimiter::new()
   mask_key()             masks API key to ***last4 for logs
   AppState               versions + services + keys + free_limiter + paid_limiter
-  McpHandler             holds Arc<ParseResult>; implements rmcp::ServerHandler
-    list_tools()         returns [list_resources, get_resource, get_type]
-    call_tool()          dispatches to handle_list_resources / _get_resource / _get_type
+  McpHandler             holds Arc<ParseResult> + version + prev/next neighbor versions; implements rmcp::ServerHandler
+    list_tools()         returns [list_resources, get_resource, get_type, compare_resource_versions]
+                         + diff_previous_version / diff_next_version when a neighbor version is loaded
+    call_tool()          dispatches to the handle_* method matching the tool name
   authenticate()         axum middleware — checks Authorization: Bearer, injects Tier
   rate_limit()           axum middleware — checks governor, logs burst_remaining / retry_after
   mcp_handler()          axum handler — routes ?version= to the correct StreamableHttpService
@@ -461,6 +462,41 @@ struct FieldDetail {
 `type_ref` and `sub_fields` are mutually exclusive. `field_type_str()` converts
 `FieldType` to a human-readable string; `leaf_ref()` walks `Array`/`Map`
 wrappers to find the inner `Ref` name.
+
+### MCP tools — version diffs
+
+Because each `StreamableHttpService` instance is dedicated to one k8s version,
+diff tools are relative to that version. At startup, loaded versions are sorted
+with `k8s_version_rank()` ("v1.36" → `(1, 36)`) and each `McpHandler` receives
+its `prev` / `next` neighbors as `Option<(String, Arc<ParseResult>)>`.
+
+- **`diff_previous_version`** (no args) — changes introduced in this instance's
+  version since the previous loaded one (`version_diff(prev, self)`).
+- **`diff_next_version`** (no args) — changes the next loaded version introduces
+  relative to this one (`version_diff(self, next)`).
+- **`compare_resource_versions`** — diff one kind between two API versions
+  within this instance's k8s version (args: `kind`, `from_api_version`,
+  `to_api_version`, optional `group` — required when the kind exists in several
+  groups, e.g. `Event`).
+
+The diff tools are only listed (and callable) when the corresponding neighbor
+version is loaded; calling them otherwise returns an invalid-request error.
+
+`version_diff()` returns `VersionDiff`: `added_resources` / `removed_resources`
+(as `ResourceSummary`, keyed by `(group, kind, api_version)` — a promotion like
+`v1beta1 → v1` shows as one removed + one added), `changed_resources`
+(`ResourceDiff`), `added_types` / `removed_types` (names across
+`simple_types` + `complex_types`), and `changed_types` (`TypeDiff`).
+
+Field-level changes are collected by `diff_fields()` into `StructDiff`
+(`added_fields` / `removed_fields` / `changed_fields`, `#[serde(flatten)]`-ed
+into the diff structs) as human-readable strings:
+`"spec.hostUsers (boolean, required)"`, `"spec.foo: type string -> integer"`,
+`"spec.bar: became required"`. Paths are prefixed per section (`""`, `spec.`,
+`status.`, `list.`). Description-only changes are ignored; comparison is one
+level deep per resource section or type (matching the site's classification
+philosophy — transitive type changes appear under `changed_types`, not under
+each resource that uses them).
 
 ### Logging
 
