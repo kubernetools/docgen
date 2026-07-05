@@ -4,8 +4,8 @@ The `mcp` binary exposes Kubernetes API documentation as a Model Context Protoco
 (MCP) server over HTTP/SSE (Streamable HTTP transport).
 
 LLM clients such as Claude Desktop connect to it and call tools to discover
-resources, inspect their fields, and drill into composite types — all from the
-in-memory parsed spec, with no network round-trips at query time.
+resources, inspect their fields, drill into composite types, and diff versions —
+all from the in-memory parsed spec, with no network round-trips at query time.
 
 ## Quick start
 
@@ -269,12 +269,122 @@ output.
 }
 ```
 
+---
+
+### `compare_resource_versions`
+
+Diff one resource kind between two of its API versions (e.g. `v1beta1` vs `v1`)
+within this instance's Kubernetes version: fields added, removed, or changed.
+
+**Input**:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `kind` | string | yes | Resource kind, e.g. `"VolumeAttributesClass"`. |
+| `from_api_version` | string | yes | Baseline API version, e.g. `"v1beta1"`. |
+| `to_api_version` | string | yes | API version to compare against the baseline, e.g. `"v1"`. |
+| `group` | string | no | API group, e.g. `"storage.k8s.io"` or `"core"`. Required only when the kind exists in several groups (e.g. `Event`). |
+
+**Output**:
+
+```json
+{
+  "kind": "VolumeAttributesClass",
+  "group": "storage.k8s.io",
+  "from_api_version": "v1beta1",
+  "to_api_version": "v1",
+  "added_fields": ["spec.hostUsers (boolean, required)"],
+  "removed_fields": ["spec.deprecatedField"],
+  "changed_fields": ["spec.foo: type string -> integer", "spec.bar: became required"]
+}
+```
+
+Field-diff entries are human-readable strings, path-prefixed by section (no
+prefix for top-level fields, `spec.`, `status.`, `list.`):
+
+- **added**: `"spec.hostUsers (boolean)"` — with `, required` appended when the new field is required
+- **removed**: the field path only, e.g. `"spec.deprecatedField"`
+- **changed**: `"…: type string -> integer"`, `"…: became required"`, or `"…: became optional"`
+
+Description-only changes are ignored. Comparison is one level deep per section:
+changes inside a referenced composite type do not appear here (for a full k8s
+version diff they show up under `changed_types` — see below).
+
+Errors: unknown kind, an API version the kind doesn't have (the message lists
+the available versions), or an ambiguous kind when `group` is omitted.
+
+---
+
+### `diff_previous_version` / `diff_next_version`
+
+Full structural diff between this instance's Kubernetes version and the
+neighboring loaded version — resources and types added, removed, or changed.
+Both tools take **no arguments**; the versions compared are fixed per instance:
+
+- `diff_previous_version` — changes this instance's version introduced since
+  the previous loaded version (e.g. on the `v1.36` instance with `v1.35`
+  loaded: `v1.35 → v1.36`).
+- `diff_next_version` — changes the next loaded version introduces relative to
+  this one (e.g. on the `v1.35` instance: `v1.35 → v1.36`).
+
+Each tool is only listed when the corresponding neighbor version was loaded at
+startup (`--k8s-versions`); calling it otherwise returns an invalid-request
+error. Neighbors follow the sorted order of the loaded versions, so with
+`--k8s-versions v1.33,v1.36` the diff is `v1.33 → v1.36`.
+
+**Output**:
+
+```json
+{
+  "from_k8s_version": "v1.35",
+  "to_k8s_version": "v1.36",
+  "added_resources": [
+    { "kind": "NewKind", "group": "apps", "api_version": "v1alpha1", "description": "…" }
+  ],
+  "removed_resources": [ "…same shape…" ],
+  "changed_resources": [
+    {
+      "kind": "Pod",
+      "group": "core",
+      "api_version": "v1",
+      "added_fields": ["spec.hostUsers (boolean)"],
+      "removed_fields": [],
+      "changed_fields": []
+    }
+  ],
+  "added_types": ["NewConfigSource"],
+  "removed_types": [],
+  "changed_types": [
+    {
+      "name": "Container",
+      "added_fields": ["restartPolicyRules ([]ContainerRestartRule)"],
+      "removed_fields": [],
+      "changed_fields": []
+    }
+  ]
+}
+```
+
+Resources are keyed by `(group, kind, api_version)`, so an API-version
+promotion (e.g. `v1beta1 → v1`) appears as one removed + one added resource.
+Resource summaries carry only the first sentence of the description; lists are
+sorted by `(group, kind, api_version)`.
+`added_types` / `removed_types` cover all named composite types (simple and
+complex); `changed_types` uses the same field-diff string format as
+`compare_resource_versions`. Because resource diffs are one level deep, a
+change inside a shared type (e.g. `Container`) appears once under
+`changed_types` rather than under every resource that uses it.
+
 ## Typical query flow
 
 ```
 list_resources                          → discover kind names and groups
   └─ get_resource(kind="Deployment")   → see all top-level fields + spec/status
        └─ get_type(type_name="...")    → drill into any complex type_ref
+
+diff_previous_version                              → what changed in this k8s version?
+  └─ compare_resource_versions(kind="…", …)        → drill into one kind's API-version diff
+       └─ get_type(type_name="…")                  → inspect a changed type
 ```
 
 ## Health probe
